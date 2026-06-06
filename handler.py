@@ -9,6 +9,22 @@ from urllib.parse import urlparse, parse_qs
 import gspread
 from google.oauth2.service_account import Credentials
 
+import time
+
+# Simple in-memory cache
+_cache = {}
+_cache_ttl = 30  # seconds
+
+def cache_get(key):
+    if key in _cache:
+        val, ts = _cache[key]
+        if time.time() - ts < _cache_ttl:
+            return val
+    return None
+
+def cache_set(key, val):
+    _cache[key] = (val, time.time())
+
 # ============================================================
 # GOOGLE SHEETS CONNECTION
 # ============================================================
@@ -17,6 +33,9 @@ SPREADSHEET_ID = "1wFTVtQRksAue0_O_rwwppnb5bAYIB0F-4k2NC5D_ZkM"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 def get_sheet_client():
+    cached = cache_get('ss')
+    if cached:
+        return cached
     creds_json = os.environ.get("GOOGLE_CREDENTIALS")
     if creds_json:
         creds_dict = json.loads(creds_json)
@@ -25,7 +44,9 @@ def get_sheet_client():
             creds_dict = json.load(f)
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     client = gspread.authorize(creds)
-    return client.open_by_key(SPREADSHEET_ID)
+    ss = client.open_by_key(SPREADSHEET_ID)
+    cache_set('ss', ss)
+    return ss
 
 def get_sheet(name):
     ss = get_sheet_client()
