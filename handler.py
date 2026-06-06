@@ -171,6 +171,7 @@ def load_trainer(body):
 
         pending_requests = []
         friends = []
+        new_acceptances = []
         try:
             friends_sheet = get_or_create_sheet(ss, "Friends", ["Requester","Recipient","Status","Timestamp"])
             friends_data = friends_sheet.get_all_values()
@@ -186,6 +187,9 @@ def load_trainer(body):
                     friend_name = recipient if requester == name else requester
                     if friend_name not in friends:
                         friends.append(friend_name)
+                # Flag when someone accepted OUR request
+                if requester == name and status == "accepted":
+                    new_acceptances.append(recipient)
         except Exception:
             pass
 
@@ -200,7 +204,8 @@ def load_trainer(body):
             "catches": trainer_catches,
             "punishments": trainer_punishments,
             "pendingRequests": pending_requests,
-            "friends": friends
+            "friends": friends,
+            "newAcceptances": new_acceptances
         })
     except Exception as e:
         return err(str(e))
@@ -229,14 +234,33 @@ def get_section_data(params):
         ss = get_sheet_client()
         sheet = ss.worksheet("Sections")
         data = sheet.get_all_values()
+        # Also fetch formulas to extract image URLs from IMAGE() formulas
+        try:
+            formulas = sheet.get('C2:C50', value_render_option='FORMULA')
+        except Exception:
+            formulas = []
         result = []
-        for row in data[1:]:
+        for i, row in enumerate(data[1:]):
             if not row or not row[0]:
                 continue
+            boss_image = ""
+            # Try to extract URL from formula like =IMAGE("url")
+            try:
+                formula = formulas[i][0] if i < len(formulas) and formulas[i] else ""
+                if formula and "http" in formula:
+                    import re
+                    m = re.search(r'"(https?://[^"]+)"', formula)
+                    if m:
+                        boss_image = m.group(1)
+            except Exception:
+                pass
+            # Fall back to plain value if no formula URL found
+            if not boss_image:
+                boss_image = row[2].strip() if len(row) > 2 else ""
             result.append({
                 "shortName": row[0].strip(),
                 "fullName": row[1].strip() if len(row) > 1 else "",
-                "bossImage": row[2].strip() if len(row) > 2 else "",
+                "bossImage": boss_image,
                 "levelCap": row[3].strip() if len(row) > 3 else ""
             })
         return ok(result)
@@ -1688,12 +1712,22 @@ class handler(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.end_headers()
 
-    def do_GET(self):
+def do_GET(self):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
         action = params.get("action", [""])[0]
 
-        # Special HTML pages
+        # Special HTML pages via path
+        if parsed.path == "/friend":
+            html, _ = serve_friend_view_html(params)
+            self.send_html(html)
+            return
+        if parsed.path == "/picks":
+            html, _ = serve_picks_html(params)
+            self.send_html(html)
+            return
+
+        # Special HTML pages via action param
         if action == "servePicks":
             html, _ = serve_picks_html(params)
             self.send_html(html)
