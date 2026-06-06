@@ -1712,7 +1712,7 @@ class handler(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.end_headers()
 
-def do_GET(self):
+    def do_GET(self):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
         action = params.get("action", [""])[0]
