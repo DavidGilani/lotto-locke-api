@@ -1,64 +1,30 @@
 import json
 import os
 import random
-import math
+import re
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
-import gspread
-from google.oauth2.service_account import Credentials
-
-import time
-
-# Simple in-memory cache
-_cache = {}
-_cache_ttl = 30  # seconds
-
-def cache_get(key):
-    if key in _cache:
-        val, ts = _cache[key]
-        if time.time() - ts < _cache_ttl:
-            return val
-    return None
-
-def cache_set(key, val):
-    _cache[key] = (val, time.time())
+from supabase import create_client
 
 # ============================================================
-# GOOGLE SHEETS CONNECTION
+# SUPABASE CONNECTION
 # ============================================================
 
-SPREADSHEET_ID = "1wFTVtQRksAue0_O_rwwppnb5bAYIB0F-4k2NC5D_ZkM"
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
-def get_sheet_client():
-    cached = cache_get('ss')
-    if cached:
-        return cached
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS")
-    if creds_json:
-        creds_dict = json.loads(creds_json)
-    else:
-        with open("credentials.json") as f:
-            creds_dict = json.load(f)
-    creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    client = gspread.authorize(creds)
-    ss = client.open_by_key(SPREADSHEET_ID)
-    cache_set('ss', ss)
-    return ss
+_supabase_client = None
 
-def get_sheet(name):
-    ss = get_sheet_client()
-    return ss.worksheet(name)
+def get_db():
+    global _supabase_client
+    if _supabase_client is None:
+        _supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _supabase_client
 
-def get_or_create_sheet(ss, name, headers):
-    try:
-        return ss.worksheet(name)
-    except gspread.exceptions.WorksheetNotFound:
-        sheet = ss.add_worksheet(title=name, rows=1000, cols=20)
-        sheet.append_row(headers)
-        return sheet
+def db():
+    return get_db()
 
 # ============================================================
 # HELPERS
@@ -69,12 +35,6 @@ def ok(data):
 
 def err(message):
     return json.dumps({"error": message})
-
-def rows_to_dicts(rows):
-    if len(rows) < 2:
-        return []
-    headers = rows[0]
-    return [dict(zip(headers, row)) for row in rows[1:]]
 
 # ============================================================
 # TRAINER FUNCTIONS
@@ -98,21 +58,20 @@ def create_trainer(body):
         game_version = version if version in valid_versions else "FireRed"
         mode = "2player" if game_mode == "2player" else "solo"
 
-        ss = get_sheet_client()
-
-        journey_sheet = get_or_create_sheet(ss, "Journey Results", ["Trainer","Section","Type","Pokemon","Version"])
-        journey_data = journey_sheet.get_all_values()
-        if any(row[0].strip().lower() == name for row in journey_data[1:] if row):
+        # Check if trainer already exists
+        existing = db().table("trainers").select("trainer").eq("trainer", name).execute()
+        if existing.data:
             return err(f"Trainer '{display_name}' already exists! Choose a different name or resume your adventure.")
 
-        catches_sheet = get_or_create_sheet(ss, "Trainer Catches", ["Trainer","RouteId","Pokemon","Version","Status","OriginalPokemon","TradeStatus"])
-        catches_data = catches_sheet.get_all_values()
-        if any(row[0].strip().lower() == name for row in catches_data[1:] if row):
-            return err(f"Trainer '{display_name}' already exists! Please resume your adventure.")
-
-        trainers_sheet = get_or_create_sheet(ss, "Trainers", ["Trainer","PIN","Version","DisplayName","GameMode","ShareCode"])
         share_code = str(random.randint(100000, 999999))
-        trainers_sheet.append_row([name, pin, game_version, display_name, mode, share_code])
+        db().table("trainers").insert({
+            "trainer": name,
+            "pin": pin,
+            "version": game_version,
+            "display_name": display_name,
+            "game_mode": mode,
+            "share_code": share_code
+        }).execute()
 
         return ok({"success": True, "trainerName": name, "displayName": display_name,
                    "version": game_version, "gameMode": mode, "shareCode": share_code})
@@ -130,87 +89,79 @@ def load_trainer(body):
             return err("Please enter your PIN.")
 
         name = trainer_name.lower()
-        ss = get_sheet_client()
 
-        trainers_sheet = get_or_create_sheet(ss, "Trainers", ["Trainer","PIN","Version","DisplayName","GameMode","ShareCode"])
-        trainer_data = trainers_sheet.get_all_values()
-        trainer_row = None
-        for row in trainer_data[1:]:
-            if row and row[0].strip().lower() == name:
-                trainer_row = row
-                break
-
-        if not trainer_row:
+        result = db().table("trainers").select("*").eq("trainer", name).execute()
+        if not result.data:
             return err(f"Trainer '{trainer_name}' not found. Please start a new adventure.")
 
-        if pin != "__skip_pin__" and trainer_row[1].strip() != pin:
+        row = result.data[0]
+        if pin != "__skip_pin__" and row["pin"] != pin:
             return err("Incorrect PIN. Please try again.")
 
-        game_version = trainer_row[2].strip() if len(trainer_row) > 2 else "FireRed"
-        display_name = trainer_row[3].strip() if len(trainer_row) > 3 else trainer_name
-        game_mode = trainer_row[4].strip() if len(trainer_row) > 4 else "solo"
-        share_code = trainer_row[5].strip() if len(trainer_row) > 5 else ""
+        game_version = row.get("version") or "FireRed"
+        display_name = row.get("display_name") or trainer_name
+        game_mode = row.get("game_mode") or "solo"
+        share_code = row.get("share_code") or ""
 
         if not share_code:
             share_code = str(random.randint(100000, 999999))
-            row_idx = trainer_data.index(trainer_row) + 1
-            trainers_sheet.update_cell(row_idx + 1, 6, share_code)
+            db().table("trainers").update({"share_code": share_code}).eq("trainer", name).execute()
 
-        journey_sheet = get_or_create_sheet(ss, "Journey Results", ["Trainer","Section","Type","Pokemon","Version"])
-        journey_data = journey_sheet.get_all_values()
+        # Journey results
+        journey_data = db().table("journey_results").select("*").eq("trainer", name).execute()
         trainer_journey = [
-            {"section": r[1].strip(), "spinType": r[2].strip(), "pokemon": r[3].strip(), "version": r[4].strip()}
-            for r in journey_data[1:] if r and r[0].strip().lower() == name
+            {"section": r["section"], "spinType": r["spin_type"], "pokemon": r["pokemon"], "version": r.get("version", "")}
+            for r in journey_data.data
         ]
 
-        catches_sheet = get_or_create_sheet(ss, "Trainer Catches", ["Trainer","RouteId","Pokemon","Version","Status","OriginalPokemon","TradeStatus"])
-        catches_data = catches_sheet.get_all_values()
+        # Catches
+        catches_data = db().table("trainer_catches").select("*").eq("trainer", name).execute()
         trainer_catches = [
             {
-                "route": r[1].strip(),
-                "name": r[2].strip(),
-                "version": r[3].strip() if len(r) > 3 else "",
-                "fainted": r[4].strip().lower() == "fainted" if len(r) > 4 else False,
-                "originalName": r[5].strip() if len(r) > 5 else "",
-                "traded": r[6].strip().lower() == "traded" if len(r) > 6 else False
+                "route": r["route_id"],
+                "name": r["pokemon"],
+                "version": r.get("version", ""),
+                "fainted": r.get("status", "") == "fainted",
+                "originalName": r.get("original_pokemon", ""),
+                "traded": r.get("trade_status", "") == "traded"
             }
-            for r in catches_data[1:] if r and r[0].strip().lower() == name
+            for r in catches_data.data
         ]
 
-        pun_sheet = get_or_create_sheet(ss, "Punishment Results", ["Trainer","Punishment","FullText","Duration","SectionSpun","ExpiresAfterSection"])
-        pun_data = pun_sheet.get_all_values()
+        # Punishments
+        pun_data = db().table("punishment_results").select("*").eq("trainer", name).execute()
         trainer_punishments = [
             {
-                "punishment": r[1].strip(),
-                "fullText": r[2].strip() if len(r) > 2 else "",
-                "duration": int(r[3]) if len(r) > 3 and r[3].strip().isdigit() else 1,
-                "sectionSpun": r[4].strip() if len(r) > 4 else "",
-                "expiresAfterSection": r[5].strip() if len(r) > 5 else ""
+                "punishment": r["punishment"],
+                "fullText": r.get("full_text", ""),
+                "duration": r.get("duration", 1),
+                "sectionSpun": r.get("section_spun", ""),
+                "expiresAfterSection": r.get("expires_after_section", "")
             }
-            for r in pun_data[1:] if r and r[0].strip().lower() == name
+            for r in pun_data.data
         ]
 
+        # Friends
         pending_requests = []
         friends = []
         new_acceptances = []
         try:
-            friends_sheet = get_or_create_sheet(ss, "Friends", ["Requester","Recipient","Status","Timestamp"])
-            friends_data = friends_sheet.get_all_values()
-            for r in friends_data[1:]:
-                if not r or len(r) < 3:
-                    continue
-                requester = r[0].strip().lower()
-                recipient = r[1].strip().lower()
-                status = r[2].strip()
+            friends_data = db().table("friends").select("*").or_(
+                f"requester.eq.{name},recipient.eq.{name}"
+            ).execute()
+            for r in friends_data.data:
+                requester = r["requester"]
+                recipient = r["recipient"]
+                status = r["status"]
                 if recipient == name and status == "pending":
-                    pending_requests.append({"from": requester, "timestamp": r[3] if len(r) > 3 else ""})
+                    pending_requests.append({"from": requester, "timestamp": r.get("timestamp", "")})
                 if status == "accepted" and (requester == name or recipient == name):
                     friend_name = recipient if requester == name else requester
                     if friend_name not in friends:
                         friends.append(friend_name)
-                # Flag when someone accepted OUR request
                 if requester == name and status == "accepted":
-                    new_acceptances.append(recipient)
+                    if recipient not in new_acceptances:
+                        new_acceptances.append(recipient)
         except Exception:
             pass
 
@@ -235,14 +186,8 @@ def save_game_mode(body):
     try:
         name = body.get("trainerName", "").strip().lower()
         game_mode = body.get("gameMode", "solo").strip()
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Trainers", ["Trainer","PIN","Version","DisplayName","GameMode","ShareCode"])
-        data = sheet.get_all_values()
-        for i, row in enumerate(data[1:], start=2):
-            if row and row[0].strip().lower() == name:
-                sheet.update_cell(i, 5, game_mode)
-                return ok({"success": True})
-        return err("Trainer not found")
+        db().table("trainers").update({"game_mode": game_mode}).eq("trainer", name).execute()
+        return ok({"success": True})
     except Exception as e:
         return err(str(e))
 
@@ -252,65 +197,30 @@ def save_game_mode(body):
 
 def get_section_data(params):
     try:
-        ss = get_sheet_client()
-        sheet = ss.worksheet("Sections")
-        data = sheet.get_all_values()
-        # Also fetch formulas to extract image URLs from IMAGE() formulas
-        try:
-            formulas = sheet.get('C2:C50', value_render_option='FORMULA')
-        except Exception:
-            formulas = []
-        result = []
-        for i, row in enumerate(data[1:]):
-            if not row or not row[0]:
-                continue
-            boss_image = ""
-            # Try to extract URL from formula like =IMAGE("url")
-            try:
-                formula = formulas[i][0] if i < len(formulas) and formulas[i] else ""
-                if formula and "http" in formula:
-                    import re
-                    m = re.search(r'"(https?://[^"]+)"', formula)
-                    if m:
-                        boss_image = m.group(1)
-            except Exception:
-                pass
-            # Fall back to plain value if no formula URL found
-            if not boss_image:
-                boss_image = row[2].strip() if len(row) > 2 else ""
-            result.append({
-                "shortName": row[0].strip(),
-                "fullName": row[1].strip() if len(row) > 1 else "",
-                "bossImage": boss_image,
-                "levelCap": row[3].strip() if len(row) > 3 else ""
-            })
-        return ok(result)
+        result = db().table("sections").select("*").order("id").execute()
+        return ok([{
+            "shortName": r["short_name"],
+            "fullName": r.get("full_name", ""),
+            "bossImage": r.get("boss_image", ""),
+            "levelCap": r.get("level_cap", "")
+        } for r in result.data])
     except Exception as e:
         return err(str(e))
 
 def get_encounter_data(params):
     try:
         version = params.get("version", ["FireRed"])[0]
-        ss = get_sheet_client()
-        sheet = ss.worksheet("Master Encounters")
-        data = sheet.get_all_values()
+        result = db().table("master_encounters").select("*").in_("version", ["Both", version]).order("id").execute()
         structured = []
         current_section = None
-        for row in data[1:]:
-            if not row or not row[0]:
-                continue
-            section_name = row[0].strip()
-            route_name = row[2].strip() if len(row) > 2 else ""
-            pkmn_name = row[4].strip() if len(row) > 4 else ""
-            game_val = row[5].strip() if len(row) > 5 else ""
-            if game_val not in ["Both", version]:
-                continue
-            if not pkmn_name:
-                continue
+        for r in result.data:
+            section_name = r["section"]
+            route_name = r["route"]
+            pkmn_name = r["pokemon"]
             if not current_section or current_section["name"] != section_name:
                 current_section = {"name": section_name, "routes": []}
                 structured.append(current_section)
-            route_entry = next((r for r in current_section["routes"] if r["name"] == route_name), None)
+            route_entry = next((rt for rt in current_section["routes"] if rt["name"] == route_name), None)
             if not route_entry:
                 route_entry = {"name": route_name, "pokemon": []}
                 current_section["routes"].append(route_entry)
@@ -321,17 +231,11 @@ def get_encounter_data(params):
 
 def get_evolution_data(params):
     try:
-        ss = get_sheet_client()
-        sheet = ss.worksheet("Evolutions")
-        data = sheet.get_all_values()
+        result = db().table("evolutions").select("*").execute()
         evo_map = {}
-        for row in data[1:]:
-            if not row or not row[0]:
-                continue
-            base = row[0].strip()
-            evolved = row[1].strip() if len(row) > 1 else ""
-            if not base or not evolved:
-                continue
+        for r in result.data:
+            base = r["base"]
+            evolved = r["evolved"]
             evo_map.setdefault(base, [])
             evo_map.setdefault(evolved, [])
             if evolved not in evo_map[base]:
@@ -344,19 +248,13 @@ def get_evolution_data(params):
 
 def get_full_evolution_map(params):
     try:
-        ss = get_sheet_client()
-        sheet = ss.worksheet("Evolutions")
-        data = sheet.get_all_values()
+        result = db().table("evolutions").select("*").execute()
         next_evo_map = {}
-        for row in data[1:]:
-            if not row or not row[0]:
-                continue
-            s1 = row[0].strip()
-            s2 = row[1].strip() if len(row) > 1 else ""
-            s3 = row[2].strip() if len(row) > 2 else ""
-            if not s1:
-                continue
-            if s2:
+        for r in result.data:
+            s1 = r["base"]
+            s2 = r["evolved"]
+            s3 = r.get("stage3", "")
+            if s1 and s2:
                 next_evo_map.setdefault(s1, [])
                 if s2 not in next_evo_map[s1]:
                     next_evo_map[s1].append(s2)
@@ -371,21 +269,8 @@ def get_full_evolution_map(params):
 def get_trade_data(params):
     try:
         version = params.get("version", ["FireRed"])[0]
-        ss = get_sheet_client()
-        sheet = ss.worksheet("Trades")
-        data = sheet.get_all_values()
-        trades = []
-        for row in data[1:]:
-            if not row or not row[0]:
-                continue
-            give = row[0].strip()
-            receive = row[1].strip() if len(row) > 1 else ""
-            ver = row[2].strip() if len(row) > 2 else "Both"
-            if not give or not receive:
-                continue
-            if ver in ["Both", version]:
-                trades.append({"give": give, "receive": receive, "version": ver})
-        return ok(trades)
+        result = db().table("trades").select("*").in_("version", ["Both", version]).execute()
+        return ok([{"give": r["give"], "receive": r["receive"], "version": r["version"]} for r in result.data])
     except Exception as e:
         return err(str(e))
 
@@ -400,34 +285,20 @@ def get_journey_wheel_data(params):
         version = params.get("version", ["FireRed"])[0]
         trainer_name = params.get("trainerName", [""])[0].lower()
 
-        ss = get_sheet_client()
-        wheel_sheet = ss.worksheet("Wheels")
-        wheel_data = wheel_sheet.get_all_values()
+        wheel_result = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", ["Both", version]).execute()
+        section_pokemon = [r["pokemon"] for r in wheel_result.data]
 
-        section_pokemon = [
-            row[1].strip() for row in wheel_data[1:]
-            if row and row[0].strip() == section_name and row[2].strip() in ["Both", version]
-        ]
+        spun_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("section", section_name).in_("spin_type", ["Mandate", "Exclude"]).execute()
+        spun = [r["pokemon"] for r in spun_result.data]
 
-        journey_sheet = get_or_create_sheet(ss, "Journey Results", ["Trainer","Section","Type","Pokemon","Version"])
-        journey_data = journey_sheet.get_all_values()
-        spun_for_section = [
-            r[3].strip() for r in journey_data[1:]
-            if r and r[0].strip().lower() == trainer_name
-            and r[1].strip() == section_name
-            and r[2].strip() in ["Mandate", "Exclude"]
-        ]
-
-        available = [p for p in section_pokemon if p not in spun_for_section]
+        available = [p for p in section_pokemon if p not in spun]
         list_to_use = available if available else section_pokemon
         random.shuffle(list_to_use)
 
-        pokedex_sheet = ss.worksheet("Pokedex")
-        pokedex_data = pokedex_sheet.get_all_values()
-        dex_map = {row[0].strip(): row[2].strip().lower() if len(row) > 2 else "normal" for row in pokedex_data[1:] if row}
+        dex_result = db().table("pokedex").select("name,type1").execute()
+        dex_map = {r["name"]: r.get("type1", "normal") for r in dex_result.data}
 
         wheel_items = [{"name": p, "image": "", "type": dex_map.get(p, "normal"), "weight": 1} for p in list_to_use]
-
         return ok({"wheelData": wheel_items, "currentGame": version, "targetRow": 0, "sectionName": section_name, "spinType": spin_type})
     except Exception as e:
         return err(str(e))
@@ -437,34 +308,24 @@ def get_elite4_wheel_data(params):
         version = params.get("version", ["FireRed"])[0]
         trainer_name = params.get("trainerName", [""])[0].lower()
 
-        ss = get_sheet_client()
-        wheel_sheet = ss.worksheet("Wheels")
-        wheel_data = wheel_sheet.get_all_values()
+        wheel_result = db().table("wheels").select("pokemon").eq("section", "Indigo Plateau").in_("version", ["Both", version]).execute()
+        section_pokemon = [r["pokemon"] for r in wheel_result.data]
 
-        section_pokemon = [
-            row[1].strip() for row in wheel_data[1:]
-            if row and row[0].strip() == "Indigo Plateau" and row[2].strip() in ["Both", version]
-        ]
+        excluded_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("spin_type", "Exclude").execute()
+        excluded = [r["pokemon"] for r in excluded_result.data]
 
-        journey_sheet = get_or_create_sheet(ss, "Journey Results", ["Trainer","Section","Type","Pokemon","Version"])
-        journey_data = journey_sheet.get_all_values()
-        excluded = [r[3].strip() for r in journey_data[1:] if r and r[0].strip().lower() == trainer_name and r[2].strip() == "Exclude"]
-
-        catches_sheet = get_or_create_sheet(ss, "Trainer Catches", ["Trainer","RouteId","Pokemon","Version","Status","OriginalPokemon","TradeStatus"])
-        catches_data = catches_sheet.get_all_values()
-        caught = [r[2].strip() for r in catches_data[1:] if r and r[0].strip().lower() == trainer_name]
+        caught_result = db().table("trainer_catches").select("pokemon").eq("trainer", trainer_name).execute()
+        caught = [r["pokemon"] for r in caught_result.data]
 
         available = [p for p in section_pokemon if p not in excluded and p not in caught]
         if not available:
             return ok({"noNewPokemon": True})
 
-        pokedex_sheet = ss.worksheet("Pokedex")
-        pokedex_data = pokedex_sheet.get_all_values()
-        dex_map = {row[0].strip(): row[2].strip().lower() if len(row) > 2 else "normal" for row in pokedex_data[1:] if row}
+        dex_result = db().table("pokedex").select("name,type1").execute()
+        dex_map = {r["name"]: r.get("type1", "normal") for r in dex_result.data}
 
         random.shuffle(available)
         wheel_items = [{"name": p, "image": "", "type": dex_map.get(p, "normal"), "weight": 1} for p in available]
-
         return ok({"wheelData": wheel_items, "currentGame": version, "targetRow": 0, "sectionName": "Indigo Plateau", "spinType": ""})
     except Exception as e:
         return err(str(e))
@@ -475,33 +336,23 @@ def get_2player_picks(params):
         version = params.get("version", ["FireRed"])[0]
         trainer_name = params.get("trainerName", [""])[0].lower()
 
-        ss = get_sheet_client()
-        wheel_sheet = ss.worksheet("Wheels")
-        wheel_data = wheel_sheet.get_all_values()
-
-        section_pokemon = [
-            row[1].strip() for row in wheel_data[1:]
-            if row and row[0].strip() == section_name and row[2].strip() in ["Both", version]
-        ]
+        wheel_result = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", ["Both", version]).execute()
+        section_pokemon = [r["pokemon"] for r in wheel_result.data]
 
         if section_name == "Indigo Plateau":
-            journey_sheet = get_or_create_sheet(ss, "Journey Results", ["Trainer","Section","Type","Pokemon","Version"])
-            journey_data = journey_sheet.get_all_values()
-            excluded = [r[3].strip() for r in journey_data[1:] if r and r[0].strip().lower() == trainer_name and r[2].strip() == "Exclude"]
-            catches_sheet = get_or_create_sheet(ss, "Trainer Catches", ["Trainer","RouteId","Pokemon","Version","Status","OriginalPokemon","TradeStatus"])
-            catches_data = catches_sheet.get_all_values()
-            caught = [r[2].strip() for r in catches_data[1:] if r and r[0].strip().lower() == trainer_name]
+            excluded_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("spin_type", "Exclude").execute()
+            excluded = [r["pokemon"] for r in excluded_result.data]
+            caught_result = db().table("trainer_catches").select("pokemon").eq("trainer", trainer_name).execute()
+            caught = [r["pokemon"] for r in caught_result.data]
             section_pokemon = [p for p in section_pokemon if p not in excluded and p not in caught]
             if not section_pokemon:
                 return ok({"noNewPokemon": True})
 
-        pokedex_sheet = ss.worksheet("Pokedex")
-        pokedex_data = pokedex_sheet.get_all_values()
-        dex_map = {row[0].strip(): row[2].strip().lower() if len(row) > 2 else "normal" for row in pokedex_data[1:] if row}
+        dex_result = db().table("pokedex").select("name,type1").execute()
+        dex_map = {r["name"]: r.get("type1", "normal") for r in dex_result.data}
 
         random.shuffle(section_pokemon)
         picks = section_pokemon[:min(3, len(section_pokemon))]
-
         return ok({"picks": [{"name": p, "type": dex_map.get(p, "normal")} for p in picks], "sectionName": section_name})
     except Exception as e:
         return err(str(e))
@@ -509,28 +360,20 @@ def get_2player_picks(params):
 def get_punishment_data(params):
     try:
         trainer_name = params.get("trainerName", [""])[0].lower()
-        ss = get_sheet_client()
-        sheet = ss.worksheet("Punishments")
-        data = sheet.get_all_values()
 
-        active_names = []
-        if trainer_name:
-            pun_sheet = get_or_create_sheet(ss, "Punishment Results", ["Trainer","Punishment","FullText","Duration","SectionSpun","ExpiresAfterSection"])
-            pun_data = pun_sheet.get_all_values()
-            active_names = [r[1].strip() for r in pun_data[1:] if r and r[0].strip().lower() == trainer_name]
+        active_result = db().table("punishment_results").select("punishment").eq("trainer", trainer_name).execute()
+        active_names = [r["punishment"] for r in active_result.data]
 
+        pun_result = db().table("punishments").select("*").execute()
         formatted = []
-        for row in data[1:]:
-            if not row or not row[0]:
-                continue
-            name = row[0].strip()
+        for r in pun_result.data:
+            name = r["name"]
             if name in active_names:
                 continue
-            full_text = row[2].strip() if len(row) > 2 else ""
             formatted.append({
                 "name": name,
-                "image": "",
-                "fullText": full_text,
+                "image": r.get("image", ""),
+                "fullText": r.get("full_text", ""),
                 "weight": random.randint(1, 3),
                 "type": "normal"
             })
@@ -551,22 +394,19 @@ def get_boss_data(params):
     try:
         section_name = params.get("sectionName", [""])[0]
         version = params.get("version", ["FireRed"])[0]
-        ss = get_sheet_client()
-        sheet = ss.worksheet("Bosses")
-        data = sheet.get_all_values()
 
-        def build_boss_entry(row):
+        def build_boss_entry(r):
             team = []
-            for slot in range(6):
-                pkmn = row[1 + slot * 2].strip() if len(row) > 1 + slot * 2 else ""
-                level = row[2 + slot * 2].strip() if len(row) > 2 + slot * 2 else ""
+            for slot in range(1, 7):
+                pkmn = r.get(f"slot{slot}_name", "")
+                level = r.get(f"slot{slot}_level", "")
                 if pkmn:
                     team.append({"name": pkmn, "level": level})
             return {
-                "boss": row[0].strip() if row else "",
+                "boss": r.get("boss", ""),
                 "team": team,
-                "notes": row[14].strip() if len(row) > 14 else "",
-                "version": row[13].strip() if len(row) > 13 else "Both"
+                "notes": r.get("notes", ""),
+                "version": r.get("version", "Both")
             }
 
         is_multi = section_name in ["Indigo Plateau", "Post-game"]
@@ -578,26 +418,19 @@ def get_boss_data(params):
             )
             entries = []
             for ename in elite_names:
-                for row in data[1:]:
-                    if row and row[0].strip() == ename:
-                        entries.append(build_boss_entry(row))
-                        break
-            for row in data[1:]:
-                if row and row[0].strip() == section_name:
-                    entries.append(build_boss_entry(row))
+                result = db().table("bosses").select("*").eq("boss", ename).execute()
+                if result.data:
+                    entries.append(build_boss_entry(result.data[0]))
+            champ_result = db().table("bosses").select("*").eq("boss", section_name).execute()
+            for r in champ_result.data:
+                entries.append(build_boss_entry(r))
             return ok({"multiRow": True, "entries": entries})
 
-        match = None
-        for row in data[1:]:
-            if not row or row[0].strip() != section_name:
-                continue
-            row_ver = row[13].strip() if len(row) > 13 else "Both"
-            if row_ver in [version, "Both"]:
-                match = row
-                if row_ver == version:
-                    break
-        if not match:
+        result = db().table("bosses").select("*").eq("boss", section_name).in_("version", [version, "Both"]).execute()
+        if not result.data:
             return ok(None)
+        # Prefer exact version match
+        match = next((r for r in result.data if r.get("version") == version), result.data[0])
         return ok({"multiRow": False, "entries": [build_boss_entry(match)]})
     except Exception as e:
         return err(str(e))
@@ -608,51 +441,33 @@ def get_boss_data(params):
 
 def save_journey_result(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Journey Results", ["Trainer","Section","Type","Pokemon","Version"])
         trainer = body.get("trainerName", "unknown").strip().lower()
-        sheet.append_row([
-            trainer,
-            body.get("sectionName", ""),
-            body.get("spinType", ""),
-            body.get("pokemon", ""),
-            body.get("version", "")
-        ])
+        db().table("journey_results").insert({
+            "trainer": trainer,
+            "section": body.get("sectionName", ""),
+            "spin_type": body.get("spinType", ""),
+            "pokemon": body.get("pokemon", ""),
+            "version": body.get("version", "")
+        }).execute()
         return ok("Success")
     except Exception as e:
         return err(str(e))
 
 def delete_journey_result(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Journey Results", ["Trainer","Section","Type","Pokemon","Version"])
         trainer = body.get("trainerName", "").strip().lower()
         section_name = body.get("sectionName", "").strip()
         spin_type = body.get("spinType", "").strip()
-        data = sheet.get_all_values()
-        for i in range(len(data) - 1, 0, -1):
-            r = data[i]
-            if r and r[0].strip().lower() == trainer and r[1].strip() == section_name and r[2].strip() == spin_type:
-                sheet.delete_rows(i + 1)
-                break
+        db().table("journey_results").delete().eq("trainer", trainer).eq("section", section_name).eq("spin_type", spin_type).execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
 
 def delete_2player_picks(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Journey Results", ["Trainer","Section","Type","Pokemon","Version"])
         trainer = body.get("trainerName", "").strip().lower()
         section_name = body.get("sectionName", "").strip()
-        data = sheet.get_all_values()
-        to_delete = []
-        for i in range(len(data) - 1, 0, -1):
-            r = data[i]
-            if r and r[0].strip().lower() == trainer and r[1].strip() == section_name and r[2].strip() in ["Pick1", "Pick2", "Pick3"]:
-                to_delete.append(i + 1)
-        for row_num in to_delete:
-            sheet.delete_rows(row_num)
+        db().table("journey_results").delete().eq("trainer", trainer).eq("section", section_name).in_("spin_type", ["Pick1", "Pick2", "Pick3"]).execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
@@ -663,102 +478,81 @@ def delete_2player_picks(body):
 
 def record_catch(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Trainer Catches", ["Trainer","RouteId","Pokemon","Version","Status","OriginalPokemon","TradeStatus"])
         trainer = body.get("trainerName", "unknown").strip().lower()
         pkmn_name = body.get("pkmnName", "")
         route_id = body.get("routeId", "")
         version = body.get("version", "FireRed")
 
-        data = sheet.get_all_values()
-
         if pkmn_name == "__UNCATCH__":
-            for i in range(len(data) - 1, 0, -1):
-                r = data[i]
-                if r and r[0].strip().lower() == trainer and r[1].strip() == route_id:
-                    sheet.delete_rows(i + 1)
-                    break
+            db().table("trainer_catches").delete().eq("trainer", trainer).eq("route_id", route_id).execute()
             return ok(True)
 
-        for i, r in enumerate(data[1:], start=2):
-            if r and r[0].strip().lower() == trainer and r[1].strip() == route_id:
-                sheet.update(f"A{i}:D{i}", [[trainer, route_id, pkmn_name, version]])
-                return ok(True)
-
-        sheet.append_row([trainer, route_id, pkmn_name, version, "", "", ""])
+        existing = db().table("trainer_catches").select("id").eq("trainer", trainer).eq("route_id", route_id).execute()
+        if existing.data:
+            db().table("trainer_catches").update({"pokemon": pkmn_name, "version": version}).eq("trainer", trainer).eq("route_id", route_id).execute()
+        else:
+            db().table("trainer_catches").insert({
+                "trainer": trainer,
+                "route_id": route_id,
+                "pokemon": pkmn_name,
+                "version": version,
+                "status": "",
+                "original_pokemon": "",
+                "trade_status": ""
+            }).execute()
         return ok(True)
     except Exception as e:
         return err(str(e))
 
 def save_fainted_pokemon(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Trainer Catches", ["Trainer","RouteId","Pokemon","Version","Status","OriginalPokemon","TradeStatus"])
         trainer = body.get("trainerName", "").strip().lower()
         route_id = body.get("routeId", "").strip()
         pkmn_name = body.get("pkmnName", "").strip()
         fainted = body.get("fainted", False)
-        data = sheet.get_all_values()
-        for i, r in enumerate(data[1:], start=2):
-            if r and r[0].strip().lower() == trainer and r[1].strip() == route_id and r[2].strip() == pkmn_name:
-                sheet.update_cell(i, 5, "fainted" if fainted else "")
-                return ok({"success": True})
-        return err("Pokemon not found in catches")
+        db().table("trainer_catches").update({"status": "fainted" if fainted else ""}).eq("trainer", trainer).eq("route_id", route_id).eq("pokemon", pkmn_name).execute()
+        return ok({"success": True})
     except Exception as e:
         return err(str(e))
 
 def save_pokemon_evolution(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Trainer Catches", ["Trainer","RouteId","Pokemon","Version","Status","OriginalPokemon","TradeStatus"])
         trainer = body.get("trainerName", "").strip().lower()
         route_id = body.get("routeId", "").strip()
         old_name = body.get("oldName", "").strip()
         new_name = body.get("newName", "").strip()
-        data = sheet.get_all_values()
-        for i, r in enumerate(data[1:], start=2):
-            if r and r[0].strip().lower() == trainer and r[1].strip() == route_id and r[2].strip() == old_name:
-                sheet.update_cell(i, 3, new_name)
-                return ok({"success": True})
-        return err("Pokemon not found in catches")
+        db().table("trainer_catches").update({"pokemon": new_name}).eq("trainer", trainer).eq("route_id", route_id).eq("pokemon", old_name).execute()
+        return ok({"success": True})
     except Exception as e:
         return err(str(e))
 
 def save_pokemon_trade(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Trainer Catches", ["Trainer","RouteId","Pokemon","Version","Status","OriginalPokemon","TradeStatus"])
         trainer = body.get("trainerName", "").strip().lower()
         route_id = body.get("routeId", "").strip()
         old_name = body.get("oldName", "").strip()
         new_name = body.get("newName", "").strip()
-        data = sheet.get_all_values()
-        for i, r in enumerate(data[1:], start=2):
-            if r and r[0].strip().lower() == trainer and r[1].strip() == route_id and r[2].strip() == old_name:
-                sheet.update_cell(i, 3, new_name)
-                sheet.update_cell(i, 6, old_name)
-                sheet.update_cell(i, 7, "traded")
-                return ok({"success": True})
-        return err("Pokemon not found in catches")
+        db().table("trainer_catches").update({
+            "pokemon": new_name,
+            "original_pokemon": old_name,
+            "trade_status": "traded"
+        }).eq("trainer", trainer).eq("route_id", route_id).eq("pokemon", old_name).execute()
+        return ok({"success": True})
     except Exception as e:
         return err(str(e))
 
 def undo_pokemon_trade(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Trainer Catches", ["Trainer","RouteId","Pokemon","Version","Status","OriginalPokemon","TradeStatus"])
         trainer = body.get("trainerName", "").strip().lower()
         route_id = body.get("routeId", "").strip()
         current_name = body.get("currentName", "").strip()
         original_name = body.get("originalName", "").strip()
-        data = sheet.get_all_values()
-        for i, r in enumerate(data[1:], start=2):
-            if r and r[0].strip().lower() == trainer and r[1].strip() == route_id and r[2].strip() == current_name:
-                sheet.update_cell(i, 3, original_name)
-                sheet.update_cell(i, 6, "")
-                sheet.update_cell(i, 7, "")
-                return ok({"success": True})
-        return err("Pokemon not found in catches")
+        db().table("trainer_catches").update({
+            "pokemon": original_name,
+            "original_pokemon": "",
+            "trade_status": ""
+        }).eq("trainer", trainer).eq("route_id", route_id).eq("pokemon", current_name).execute()
+        return ok({"success": True})
     except Exception as e:
         return err(str(e))
 
@@ -768,34 +562,25 @@ def undo_pokemon_trade(body):
 
 def save_punishment_result(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Punishment Results", ["Trainer","Punishment","FullText","Duration","SectionSpun","ExpiresAfterSection"])
         trainer = body.get("trainerName", "").strip().lower()
-        sheet.append_row([
-            trainer,
-            body.get("punishment", ""),
-            body.get("fullText", ""),
-            body.get("duration", 1),
-            body.get("sectionSpun", ""),
-            body.get("expiresAfterSection", "")
-        ])
+        db().table("punishment_results").insert({
+            "trainer": trainer,
+            "punishment": body.get("punishment", ""),
+            "full_text": body.get("fullText", ""),
+            "duration": body.get("duration", 1),
+            "section_spun": body.get("sectionSpun", ""),
+            "expires_after_section": body.get("expiresAfterSection", "")
+        }).execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
 
 def delete_punishment_result(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Punishment Results", ["Trainer","Punishment","FullText","Duration","SectionSpun","ExpiresAfterSection"])
         trainer = body.get("trainerName", "").strip().lower()
         punishment = body.get("punishment", "").strip()
         section_spun = body.get("sectionSpun", "").strip()
-        data = sheet.get_all_values()
-        for i in range(len(data) - 1, 0, -1):
-            r = data[i]
-            if r and r[0].strip().lower() == trainer and r[1].strip() == punishment and r[4].strip() == section_spun:
-                sheet.delete_rows(i + 1)
-                break
+        db().table("punishment_results").delete().eq("trainer", trainer).eq("punishment", punishment).eq("section_spun", section_spun).execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
@@ -806,14 +591,20 @@ def delete_punishment_result(body):
 
 def save_boss_battle_log(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Boss Battle Log", ["Trainer","Section","Slot1","Slot2","Slot3","Slot4","Slot5","Slot6","Result","Timestamp"])
         trainer = body.get("trainerName", "").strip().lower()
-        section_name = body.get("sectionName", "")
         slots = body.get("slots", [])
-        result = body.get("result", "")
-        row = [trainer, section_name] + [slots[i] if i < len(slots) else "" for i in range(6)] + [result, datetime.now().isoformat()]
-        sheet.append_row(row)
+        db().table("boss_battle_log").insert({
+            "trainer": trainer,
+            "section": body.get("sectionName", ""),
+            "slot1": slots[0] if len(slots) > 0 else "",
+            "slot2": slots[1] if len(slots) > 1 else "",
+            "slot3": slots[2] if len(slots) > 2 else "",
+            "slot4": slots[3] if len(slots) > 3 else "",
+            "slot5": slots[4] if len(slots) > 4 else "",
+            "slot6": slots[5] if len(slots) > 5 else "",
+            "result": body.get("result", ""),
+            "timestamp": datetime.now().isoformat()
+        }).execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
@@ -822,12 +613,10 @@ def get_boss_battle_log(params):
     try:
         trainer = params.get("trainerName", [""])[0].lower()
         section_name = params.get("sectionName", [""])[0]
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Boss Battle Log", ["Trainer","Section","Slot1","Slot2","Slot3","Slot4","Slot5","Slot6","Result","Timestamp"])
-        data = sheet.get_all_values()
+        result = db().table("boss_battle_log").select("*").eq("trainer", trainer).eq("section", section_name).execute()
         rows = [
-            {"slots": [r[i].strip() for i in range(2, 8) if i < len(r) and r[i].strip()], "result": r[8].strip() if len(r) > 8 else ""}
-            for r in data[1:] if r and r[0].strip().lower() == trainer and r[1].strip() == section_name
+            {"slots": [r[f"slot{i}"] for i in range(1,7) if r.get(f"slot{i}")], "result": r.get("result", "")}
+            for r in result.data
         ]
         return ok(rows)
     except Exception as e:
@@ -836,15 +625,12 @@ def get_boss_battle_log(params):
 def get_defeated_sections(params):
     try:
         trainer = params.get("trainerName", [""])[0].lower()
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Boss Battle Log", ["Trainer","Section","Slot1","Slot2","Slot3","Slot4","Slot5","Slot6","Result","Timestamp"])
-        data = sheet.get_all_values()
+        result = db().table("boss_battle_log").select("section").eq("trainer", trainer).eq("result", "Defeated").execute()
         defeated = []
-        for r in data[1:]:
-            if r and r[0].strip().lower() == trainer and len(r) > 8 and r[8].strip() == "Defeated":
-                sn = r[1].strip()
-                if sn not in defeated:
-                    defeated.append(sn)
+        for r in result.data:
+            sn = r["section"]
+            if sn not in defeated:
+                defeated.append(sn)
         return ok(defeated)
     except Exception as e:
         return err(str(e))
@@ -858,15 +644,11 @@ def search_trainer(params):
         search_name = params.get("searchName", [""])[0].strip().lower()
         if not search_name or len(search_name) < 2:
             return err("Please enter at least 2 characters.")
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Trainers", ["Trainer","PIN","Version","DisplayName","GameMode","ShareCode"])
-        data = sheet.get_all_values()
+        result = db().table("trainers").select("trainer,display_name").execute()
         results = []
-        for row in data[1:]:
-            if not row:
-                continue
-            trainer_key = row[0].strip().lower()
-            display_name = row[3].strip() if len(row) > 3 else row[0].strip()
+        for r in result.data:
+            trainer_key = r["trainer"]
+            display_name = r.get("display_name") or trainer_key
             if search_name in trainer_key or search_name in display_name.lower():
                 results.append({"trainerName": trainer_key, "displayName": display_name})
         return ok({"results": results[:10]})
@@ -879,24 +661,28 @@ def send_friend_request(body):
         rec = body.get("recipientName", "").strip().lower()
         if req == rec:
             return err("You can't send a friend request to yourself.")
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Friends", ["Requester","Recipient","Status","Timestamp"])
-        data = sheet.get_all_values()
-        for i, r in enumerate(data[1:], start=2):
-            if not r or len(r) < 3:
-                continue
-            r0 = r[0].strip().lower()
-            r1 = r[1].strip().lower()
-            status = r[2].strip()
-            if (r0 == req and r1 == rec) or (r0 == rec and r1 == req):
-                if status == "accepted":
-                    return err("You are already friends!")
-                if status == "pending":
-                    return ok({"success": True})
-                if status == "declined":
-                    sheet.update(f"A{i}:D{i}", [[req, rec, "pending", datetime.now().isoformat()]])
-                    return ok({"success": True})
-        sheet.append_row([req, rec, "pending", datetime.now().isoformat()])
+
+        existing = db().table("friends").select("*").or_(
+            f"and(requester.eq.{req},recipient.eq.{rec}),and(requester.eq.{rec},recipient.eq.{req})"
+        ).execute()
+
+        if existing.data:
+            r = existing.data[0]
+            status = r["status"]
+            if status == "accepted":
+                return err("You are already friends!")
+            if status == "pending":
+                return ok({"success": True})
+            if status == "declined":
+                db().table("friends").update({"status": "pending", "timestamp": datetime.now().isoformat()}).eq("id", r["id"]).execute()
+                return ok({"success": True})
+
+        db().table("friends").insert({
+            "requester": req,
+            "recipient": rec,
+            "status": "pending",
+            "timestamp": datetime.now().isoformat()
+        }).execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
@@ -905,14 +691,8 @@ def accept_friend_request(body):
     try:
         rec = body.get("recipientName", "").strip().lower()
         req = body.get("requesterName", "").strip().lower()
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Friends", ["Requester","Recipient","Status","Timestamp"])
-        data = sheet.get_all_values()
-        for i, r in enumerate(data[1:], start=2):
-            if r and r[0].strip().lower() == req and r[1].strip().lower() == rec and r[2].strip() == "pending":
-                sheet.update_cell(i, 3, "accepted")
-                return ok({"success": True})
-        return err("Friend request not found.")
+        db().table("friends").update({"status": "accepted"}).eq("requester", req).eq("recipient", rec).eq("status", "pending").execute()
+        return ok({"success": True})
     except Exception as e:
         return err(str(e))
 
@@ -920,13 +700,7 @@ def decline_friend_request(body):
     try:
         rec = body.get("recipientName", "").strip().lower()
         req = body.get("requesterName", "").strip().lower()
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Friends", ["Requester","Recipient","Status","Timestamp"])
-        data = sheet.get_all_values()
-        for i, r in enumerate(data[1:], start=2):
-            if r and r[0].strip().lower() == req and r[1].strip().lower() == rec and r[2].strip() == "pending":
-                sheet.update_cell(i, 3, "declined")
-                return ok({"success": True})
+        db().table("friends").update({"status": "declined"}).eq("requester", req).eq("recipient", rec).eq("status", "pending").execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
@@ -935,18 +709,9 @@ def remove_friend(body):
     try:
         t = body.get("trainerName", "").strip().lower()
         f = body.get("friendName", "").strip().lower()
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Friends", ["Requester","Recipient","Status","Timestamp"])
-        data = sheet.get_all_values()
-        for i in range(len(data) - 1, 0, -1):
-            r = data[i]
-            if not r:
-                continue
-            r0 = r[0].strip().lower()
-            r1 = r[1].strip().lower()
-            if (r0 == t and r1 == f) or (r0 == f and r1 == t):
-                sheet.delete_rows(i + 1)
-                return ok({"success": True})
+        db().table("friends").delete().or_(
+            f"and(requester.eq.{t},recipient.eq.{f}),and(requester.eq.{f},recipient.eq.{t})"
+        ).execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
@@ -954,57 +719,32 @@ def remove_friend(body):
 def get_friend_view_data(params):
     try:
         friend_name = params.get("friendTrainerName", [""])[0].strip().lower()
-        ss = get_sheet_client()
 
-        trainers_sheet = get_or_create_sheet(ss, "Trainers", ["Trainer","PIN","Version","DisplayName","GameMode","ShareCode"])
-        trainer_data = trainers_sheet.get_all_values()
-        trainer_row = None
-        for row in trainer_data[1:]:
-            if row and row[0].strip().lower() == friend_name:
-                trainer_row = row
-                break
-        if not trainer_row:
+        trainer_result = db().table("trainers").select("*").eq("trainer", friend_name).execute()
+        if not trainer_result.data:
             return err("Trainer not found.")
+        row = trainer_result.data[0]
+        display_name = row.get("display_name") or friend_name
+        version = row.get("version") or "FireRed"
+        game_mode = row.get("game_mode") or "solo"
 
-        display_name = trainer_row[3].strip() if len(trainer_row) > 3 else trainer_row[0].strip()
-        version = trainer_row[2].strip() if len(trainer_row) > 2 else "FireRed"
-        game_mode = trainer_row[4].strip() if len(trainer_row) > 4 else "solo"
+        journey_data = db().table("journey_results").select("*").eq("trainer", friend_name).execute()
+        catches_data = db().table("trainer_catches").select("*").eq("trainer", friend_name).execute()
+        pun_data = db().table("punishment_results").select("*").eq("trainer", friend_name).execute()
 
-        journey_sheet = get_or_create_sheet(ss, "Journey Results", ["Trainer","Section","Type","Pokemon","Version"])
-        journey_data = journey_sheet.get_all_values()
-        trainer_journey = [r for r in journey_data[1:] if r and r[0].strip().lower() == friend_name]
+        sections_result = db().table("sections").select("*").order("id").execute()
+        sections_data = [{
+            "shortName": r["short_name"],
+            "fullName": r.get("full_name", ""),
+            "bossImage": r.get("boss_image", ""),
+            "levelCap": r.get("level_cap", "")
+        } for r in sections_result.data]
 
-        catches_sheet = get_or_create_sheet(ss, "Trainer Catches", ["Trainer","RouteId","Pokemon","Version","Status","OriginalPokemon","TradeStatus"])
-        catches_data = catches_sheet.get_all_values()
-        trainer_catches = [r for r in catches_data[1:] if r and r[0].strip().lower() == friend_name]
-
-        pun_sheet = get_or_create_sheet(ss, "Punishment Results", ["Trainer","Punishment","FullText","Duration","SectionSpun","ExpiresAfterSection"])
-        pun_data = pun_sheet.get_all_values()
-        trainer_puns = [r for r in pun_data[1:] if r and r[0].strip().lower() == friend_name]
-
-        sections_sheet = ss.worksheet("Sections")
-        sections_raw = sections_sheet.get_all_values()
-        sections_data = []
-        for row in sections_raw[1:]:
-            if not row or not row[0]:
-                continue
-            sections_data.append({
-                "shortName": row[0].strip(),
-                "fullName": row[1].strip() if len(row) > 1 else "",
-                "bossImage": row[2].strip() if len(row) > 2 else "",
-                "levelCap": row[3].strip() if len(row) > 3 else ""
-            })
-
-        evo_sheet = ss.worksheet("Evolutions")
-        evo_raw = evo_sheet.get_all_values()
+        evo_result = db().table("evolutions").select("*").execute()
         evo_map = {}
-        for row in evo_raw[1:]:
-            if not row or not row[0]:
-                continue
-            base = row[0].strip()
-            evolved = row[1].strip() if len(row) > 1 else ""
-            if not base or not evolved:
-                continue
+        for r in evo_result.data:
+            base = r["base"]
+            evolved = r["evolved"]
             evo_map.setdefault(base, [])
             evo_map.setdefault(evolved, [])
             if evolved not in evo_map[base]:
@@ -1012,39 +752,31 @@ def get_friend_view_data(params):
             if base not in evo_map[evolved]:
                 evo_map[evolved].append(base)
 
-        enc_sheet = ss.worksheet("Master Encounters")
-        enc_raw = enc_sheet.get_all_values()
+        enc_result = db().table("master_encounters").select("*").in_("version", ["Both", version]).order("id").execute()
         encounter_data = {}
-        for row in enc_raw[1:]:
-            if not row or not row[0]:
-                continue
-            sec = row[0].strip()
-            route_name = row[2].strip() if len(row) > 2 else ""
-            pkmn_name = row[4].strip() if len(row) > 4 else ""
-            game_val = row[5].strip() if len(row) > 5 else ""
-            if not pkmn_name or game_val not in ["Both", version]:
-                continue
+        for r in enc_result.data:
+            sec = r["section"]
+            route_name = r["route"]
+            pkmn_name = r["pokemon"]
             encounter_data.setdefault(sec, [])
-            route_entry = next((r for r in encounter_data[sec] if r["name"] == route_name), None)
+            route_entry = next((rt for rt in encounter_data[sec] if rt["name"] == route_name), None)
             if not route_entry:
                 route_entry = {"name": route_name, "pokemon": []}
                 encounter_data[sec].append(route_entry)
             route_entry["pokemon"].append(pkmn_name)
 
-        bbl_sheet = get_or_create_sheet(ss, "Boss Battle Log", ["Trainer","Section","Slot1","Slot2","Slot3","Slot4","Slot5","Slot6","Result","Timestamp"])
-        bbl_data = bbl_sheet.get_all_values()
+        bbl_result = db().table("boss_battle_log").select("section").eq("trainer", friend_name).eq("result", "Defeated").execute()
         defeated_sections = []
-        for r in bbl_data[1:]:
-            if r and r[0].strip().lower() == friend_name and len(r) > 8 and r[8].strip() == "Defeated":
-                sn = r[1].strip()
-                if sn not in defeated_sections:
-                    defeated_sections.append(sn)
+        for r in bbl_result.data:
+            sn = r["section"]
+            if sn not in defeated_sections:
+                defeated_sections.append(sn)
 
         spin_map = {}
-        for r in trainer_journey:
-            sec = r[1].strip()
-            type_ = r[2].strip()
-            pkmn = r[3].strip()
+        for r in journey_data.data:
+            sec = r["section"]
+            type_ = r["spin_type"]
+            pkmn = r["pokemon"]
             spin_map.setdefault(sec, {"picks": []})
             if type_ == "Mandate":
                 spin_map[sec]["mandate"] = pkmn
@@ -1054,13 +786,12 @@ def get_friend_view_data(params):
                 spin_map[sec]["picks"].append({"spinType": type_, "pokemon": pkmn})
 
         catch_map = {}
-        for r in trainer_catches:
-            route = r[1].strip()
-            catch_map[route] = {
-                "name": r[2].strip(),
-                "fainted": r[4].strip().lower() == "fainted" if len(r) > 4 else False,
-                "originalName": r[5].strip() if len(r) > 5 else "",
-                "traded": r[6].strip().lower() == "traded" if len(r) > 6 else False
+        for r in catches_data.data:
+            catch_map[r["route_id"]] = {
+                "name": r["pokemon"],
+                "fainted": r.get("status", "") == "fainted",
+                "originalName": r.get("original_pokemon", ""),
+                "traded": r.get("trade_status", "") == "traded"
             }
 
         current_section_index = 0
@@ -1081,15 +812,15 @@ def get_friend_view_data(params):
                         to_check.append(rel)
             return family
 
-        all_mandate_names = [r[3].strip() for r in trainer_journey if r and r[2].strip() == "Mandate"]
+        all_mandate_names = [r["pokemon"] for r in journey_data.data if r["spin_type"] == "Mandate"]
 
         team_mandatory, team_regular, team_graveyard = [], [], []
-        for r in trainer_catches:
-            catch_name = r[2].strip()
-            fainted = r[4].strip().lower() == "fainted" if len(r) > 4 else False
-            traded = r[6].strip().lower() == "traded" if len(r) > 6 else False
-            original_name = r[5].strip() if len(r) > 5 else ""
-            route = r[1].strip()
+        for r in catches_data.data:
+            catch_name = r["pokemon"]
+            fainted = r.get("status", "") == "fainted"
+            traded = r.get("trade_status", "") == "traded"
+            original_name = r.get("original_pokemon", "")
+            route = r["route_id"]
             fam = get_family(catch_name)
             fam_orig = get_family(original_name) if original_name else {}
             is_mand = any(mn in fam or mn in fam_orig for mn in all_mandate_names)
@@ -1102,14 +833,21 @@ def get_friend_view_data(params):
                 team_regular.append(entry)
 
         active_punishments = []
-        for p in trainer_puns:
+        for p in pun_data.data:
             exp_idx = len(sections_data) - 1
             for i, sec in enumerate(sections_data):
-                if sec["shortName"] == (p[5].strip() if len(p) > 5 else ""):
+                if sec["shortName"] == p.get("expires_after_section", ""):
                     exp_idx = i
                     break
             if exp_idx >= current_section_index:
-                active_punishments.append(p)
+                active_punishments.append([
+                    p.get("trainer", ""),
+                    p.get("punishment", ""),
+                    p.get("full_text", ""),
+                    p.get("duration", 1),
+                    p.get("section_spun", ""),
+                    p.get("expires_after_section", "")
+                ])
 
         return ok({
             "displayName": display_name,
@@ -1133,36 +871,32 @@ def get_friend_view_data(params):
 def get_friend_share_url(params):
     try:
         friend_name = params.get("friendTrainerName", [""])[0].strip().lower()
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Trainers", ["Trainer","PIN","Version","DisplayName","GameMode","ShareCode"])
-        data = sheet.get_all_values()
-        for row in data[1:]:
-            if row and row[0].strip().lower() == friend_name:
-                share_code = row[5].strip() if len(row) > 5 else ""
-                if not share_code:
-                    return err("This trainer hasn't generated a share link yet.")
-                display_name = row[3].strip() if len(row) > 3 else friend_name
-                base_url = os.environ.get("VERCEL_URL", "")
-                if base_url and not base_url.startswith("http"):
-                    base_url = "https://" + base_url
-                url = f"{base_url}/friend?code={friend_name}-{share_code}"
-                return ok({"success": True, "url": url, "displayName": display_name})
-        return err("Trainer not found.")
+        result = db().table("trainers").select("share_code,display_name").eq("trainer", friend_name).execute()
+        if not result.data:
+            return err("Trainer not found.")
+        row = result.data[0]
+        share_code = row.get("share_code", "")
+        if not share_code:
+            return err("This trainer hasn't generated a share link yet.")
+        display_name = row.get("display_name") or friend_name
+        base_url = os.environ.get("VERCEL_URL", "")
+        if base_url and not base_url.startswith("http"):
+            base_url = "https://" + base_url
+        url = f"{base_url}/friend?code={friend_name}-{share_code}"
+        return ok({"success": True, "url": url, "displayName": display_name})
     except Exception as e:
         return err(str(e))
 
 def log_image_error(body):
     try:
-        ss = get_sheet_client()
-        sheet = get_or_create_sheet(ss, "Errors", ["Timestamp","Trainer","Image Type","Game Version","Game Section","Image Name"])
-        sheet.append_row([
-            datetime.now().isoformat(),
-            body.get("trainerName", "unknown"),
-            body.get("imageType", ""),
-            body.get("gameVersion", ""),
-            body.get("gameSection", ""),
-            body.get("imageName", "")
-        ])
+        db().table("errors").insert({
+            "timestamp": datetime.now().isoformat(),
+            "trainer": body.get("trainerName", "unknown"),
+            "image_type": body.get("imageType", ""),
+            "game_version": body.get("gameVersion", ""),
+            "game_section": body.get("gameSection", ""),
+            "image_name": body.get("imageName", "")
+        }).execute()
         return ok(True)
     except Exception as e:
         return err(str(e))
@@ -1174,7 +908,27 @@ def get_web_app_url(params):
     return ok(base_url)
 
 # ============================================================
-# SERVE PICKS PAGE (friend 2-player pick page)
+# PICKS STATE
+# ============================================================
+
+def get_picks_state(params):
+    try:
+        trainer = params.get("trainer", [""])[0].strip().lower()
+        section_name = params.get("section", [""])[0].strip()
+
+        result = db().table("journey_results").select("*").eq("trainer", trainer).eq("section", section_name).execute()
+        picks = sorted(
+            [{"spinType": r["spin_type"], "pokemon": r["pokemon"]} for r in result.data if r["spin_type"] in ["Pick1","Pick2","Pick3"]],
+            key=lambda x: x["spinType"]
+        )
+        mandate = next((r["pokemon"] for r in result.data if r["spin_type"] == "Mandate"), None)
+        exclude = next((r["pokemon"] for r in result.data if r["spin_type"] == "Exclude"), None)
+        return ok({"success": True, "picks": picks, "mandate": mandate, "exclude": exclude})
+    except Exception as e:
+        return err(str(e))
+
+# ============================================================
+# SERVE PICKS PAGE
 # ============================================================
 
 def serve_picks_html(params):
@@ -1182,39 +936,34 @@ def serve_picks_html(params):
         trainer = params.get("trainer", [""])[0].strip().lower()
         section_name = params.get("section", [""])[0].strip()
 
-        ss = get_sheet_client()
-        journey_sheet = get_or_create_sheet(ss, "Journey Results", ["Trainer","Section","Type","Pokemon","Version"])
-        journey_data = journey_sheet.get_all_values()
+        journey_result = db().table("journey_results").select("*").eq("trainer", trainer).eq("section", section_name).execute()
 
         picks = sorted(
-            [r for r in journey_data[1:] if r and r[0].strip().lower() == trainer and r[1].strip() == section_name and r[2].strip() in ["Pick1","Pick2","Pick3"]],
-            key=lambda r: r[2]
+            [r for r in journey_result.data if r["spin_type"] in ["Pick1","Pick2","Pick3"]],
+            key=lambda r: r["spin_type"]
         )
-        mandate_row = next((r for r in journey_data[1:] if r and r[0].strip().lower() == trainer and r[1].strip() == section_name and r[2].strip() == "Mandate"), None)
-        exclude_row = next((r for r in journey_data[1:] if r and r[0].strip().lower() == trainer and r[1].strip() == section_name and r[2].strip() == "Exclude"), None)
+        mandate_row = next((r for r in journey_result.data if r["spin_type"] == "Mandate"), None)
+        exclude_row = next((r for r in journey_result.data if r["spin_type"] == "Exclude"), None)
 
-        trainers_sheet = get_or_create_sheet(ss, "Trainers", ["Trainer","PIN","Version","DisplayName","GameMode","ShareCode"])
-        trainer_data = trainers_sheet.get_all_values()
+        trainer_result = db().table("trainers").select("display_name,version").eq("trainer", trainer).execute()
         display_name = trainer
         trainer_version = "FireRed"
-        for row in trainer_data[1:]:
-            if row and row[0].strip().lower() == trainer:
-                display_name = row[3].strip() if len(row) > 3 else display_name
-                trainer_version = row[2].strip() if len(row) > 2 else "FireRed"
-                break
+        if trainer_result.data:
+            display_name = trainer_result.data[0].get("display_name") or trainer
+            trainer_version = trainer_result.data[0].get("version") or "FireRed"
 
         base_url = os.environ.get("VERCEL_URL", "")
         if base_url and not base_url.startswith("http"):
             base_url = "https://" + base_url
 
-        mandate = mandate_row[3].strip() if mandate_row else None
-        exclude = exclude_row[3].strip() if exclude_row else None
+        mandate = mandate_row["pokemon"] if mandate_row else None
+        exclude = exclude_row["pokemon"] if exclude_row else None
         already_chosen = mandate and exclude
 
         def pkmn_img(name):
             img_name = name.lower().replace(" ", "-").replace(".", "").replace("'", "")
-            if name == "Nidoran♀": img_name = "nidoran-f"
-            if name == "Nidoran♂": img_name = "nidoran-m"
+            if name == "Nidoran\u2640": img_name = "nidoran-f"
+            if name == "Nidoran\u2642": img_name = "nidoran-m"
             return f"https://img.pokemondb.net/sprites/heartgold-soulsilver/normal/{img_name}.png"
 
         picks_html = ""
@@ -1222,7 +971,7 @@ def serve_picks_html(params):
             picks_html = '<p style="color:#aaa;text-align:center;">No picks have been generated for this section yet.</p>'
         else:
             for idx, pick_row in enumerate(picks):
-                pkmn = pick_row[3].strip()
+                pkmn = pick_row["pokemon"]
                 img_url = pkmn_img(pkmn)
                 is_mandated = mandate == pkmn
                 is_excluded = exclude == pkmn
@@ -1247,8 +996,9 @@ def serve_picks_html(params):
                 picks_html += '</div>'
 
         status_msg = '<div style="background:#1a2e21;border:1px solid #2ed573;border-radius:10px;padding:12px;margin-bottom:16px;color:#2ed573;font-size:13px;text-align:center;">Both picks have been made for this section!</div>' if already_chosen else ""
-
-        api_base = f"{base_url}/api"
+        api_base = os.environ.get("RENDER_URL", base_url)
+        if not api_base.endswith("/api"):
+            api_base = api_base.rstrip("/") + "/api"
 
         html = f'''<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{{margin:0;padding:0;background:#1a1a1a;color:white;font-family:'Segoe UI',sans-serif;}}
@@ -1332,25 +1082,7 @@ function renderPicksFromState(state){{
 </body></html>'''
         return html, "text/html"
     except Exception as e:
-        return f"<html><body><h2>Error</h2><p>{str(e)}</p></body></html>", "text/html"
-
-def get_picks_state(params):
-    try:
-        trainer = params.get("trainer", [""])[0].strip().lower()
-        section_name = params.get("section", [""])[0].strip()
-        ss = get_sheet_client()
-        journey_sheet = get_or_create_sheet(ss, "Journey Results", ["Trainer","Section","Type","Pokemon","Version"])
-        journey_data = journey_sheet.get_all_values()
-        picks = sorted(
-            [{"spinType": r[2].strip(), "pokemon": r[3].strip()} for r in journey_data[1:]
-             if r and r[0].strip().lower() == trainer and r[1].strip() == section_name and r[2].strip() in ["Pick1","Pick2","Pick3"]],
-            key=lambda x: x["spinType"]
-        )
-        mandate = next((r[3].strip() for r in journey_data[1:] if r and r[0].strip().lower() == trainer and r[1].strip() == section_name and r[2].strip() == "Mandate"), None)
-        exclude = next((r[3].strip() for r in journey_data[1:] if r and r[0].strip().lower() == trainer and r[1].strip() == section_name and r[2].strip() == "Exclude"), None)
-        return ok({"success": True, "picks": picks, "mandate": mandate, "exclude": exclude})
-    except Exception as e:
-        return err(str(e))
+        return f"<html><body style='background:#1a1a1a;color:white;padding:30px;'><h2>Error</h2><p>{str(e)}</p></body></html>", "text/html"
 
 def serve_friend_view_html(params):
     try:
@@ -1364,14 +1096,8 @@ def serve_friend_view_html(params):
 
         trainer_name, share_code = parts[0].lower(), parts[1]
 
-        ss = get_sheet_client()
-        trainers_sheet = get_or_create_sheet(ss, "Trainers", ["Trainer","PIN","Version","DisplayName","GameMode","ShareCode"])
-        trainer_data = trainers_sheet.get_all_values()
-        valid = any(
-            row and row[0].strip().lower() == trainer_name and len(row) > 5 and row[5].strip() == share_code
-            for row in trainer_data[1:]
-        )
-        if not valid:
+        result = db().table("trainers").select("share_code").eq("trainer", trainer_name).execute()
+        if not result.data or result.data[0].get("share_code") != share_code:
             return "<html><body style='background:#1a1a1a;color:white;padding:30px;text-align:center;'><h2>Journey not found</h2><p style='color:#aaa;'>This link may be invalid or expired.</p></body></html>", "text/html"
 
         data_json = get_friend_view_data({"friendTrainerName": [trainer_name]})
@@ -1413,22 +1139,22 @@ def build_friend_view_html(data, base_url):
         "Sabrina": {"url": "https://archives.bulbagarden.net/media/upload/6/6b/Marsh_Badge.png", "name": "Marsh Badge"},
         "Blaine": {"url": "https://archives.bulbagarden.net/media/upload/1/12/Volcano_Badge.png", "name": "Volcano Badge"},
         "Giovanni": {"url": "https://archives.bulbagarden.net/media/upload/7/78/Earth_Badge.png", "name": "Earth Badge"},
-        "Indigo Plateau": {"emoji": "🏆", "name": "Kanto Champion"},
-        "Post-game": {"emoji": "⭐", "name": "Complete!"}
+        "Indigo Plateau": {"emoji": "\U0001f3c6", "name": "Kanto Champion"},
+        "Post-game": {"emoji": "\u2b50", "name": "Complete!"}
     }
 
     def pkmn_img(name):
         img = name.lower().replace(" ", "-").replace(".", "").replace("'", "")
-        if name == "Nidoran♀": img = "nidoran-f"
-        if name == "Nidoran♂": img = "nidoran-m"
+        if name == "Nidoran\u2640": img = "nidoran-f"
+        if name == "Nidoran\u2642": img = "nidoran-m"
         return f"https://img.pokemondb.net/sprites/heartgold-soulsilver/normal/{img}.png"
 
     def team_card(p):
-        route_label = "Trade" if p.get("traded") else p.get("route","").replace("route-","").replace("-"," ")
+        route_label = "Trade" if p.get("traded") else p.get("route", "").replace("route-", "").replace("-", " ")
         color = "#f0a500" if p.get("traded") else "#bbb"
         mand_class = " mandatory" if p.get("isMand") else ""
         faint_class = " fainted" if p.get("fainted") else ""
-        skull = '<div class="fainted-overlay" style="cursor:default;pointer-events:none;">💀</div>' if p.get("fainted") else ""
+        skull = '<div class="fainted-overlay" style="cursor:default;pointer-events:none;">\U0001f480</div>' if p.get("fainted") else ""
         return f'<div class="team-member{mand_class}{faint_class}">{skull}<img src="{pkmn_img(p["name"])}" style="width:56px;height:56px;" onerror="this.onerror=null;"><div style="font-weight:bold;margin-top:4px;font-size:10px;color:#fff;">{p["name"]}</div><div style="font-size:9px;color:{color};">{route_label}</div></div>'
 
     team_html = ""
@@ -1442,7 +1168,7 @@ def build_friend_view_html(data, base_url):
         for p in team_regular: team_html += team_card(p)
         team_html += '</div></div>'
         if team_graveyard:
-            team_html += '<div id="team-graveyard-box"><div style="font-size:11px;font-weight:bold;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">💀 Graveyard</div><div id="team-graveyard-grid">'
+            team_html += '<div id="team-graveyard-box"><div style="font-size:11px;font-weight:bold;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">\U0001f480 Graveyard</div><div id="team-graveyard-grid">'
             for p in team_graveyard: team_html += team_card(p)
             team_html += '</div></div>'
         team_html += '</div>'
@@ -1455,7 +1181,7 @@ def build_friend_view_html(data, base_url):
         pun_html += '</div>'
 
     sections_html = ""
-    STARTERS = ["Bulbasaur","Charmander","Squirtle"]
+    STARTERS = ["Bulbasaur", "Charmander", "Squirtle"]
     starter_catch = catch_map.get("route-oaks-lab")
 
     for index, section in enumerate(sections_data):
@@ -1470,11 +1196,9 @@ def build_friend_view_html(data, base_url):
             elif "url" in badge:
                 badge_html = f'<div class="section-badge-wrap"><img class="section-badge-img" src="{badge["url"]}" title="{badge["name"]}" onerror="this.style.display=\'none\'"></div>'
 
-        boss_img = f'<img class="section-boss-img" src="{section["bossImage"]}" onerror="this.style.display=\'none\'">' if section.get("bossImage") else '<div class="section-boss-placeholder">🏆</div>'
-        current_class = " current" if is_current else ""
-        completed_class = " completed" if is_completed else ""
+        boss_img = f'<img class="section-boss-img" src="{section["bossImage"]}" onerror="this.style.display=\'none\'">' if section.get("bossImage") else '<div class="section-boss-placeholder">&#127942;</div>'
 
-        card = f'<div class="section-card{current_class}{completed_class}">'
+        card = f'<div class="section-card{" current" if is_current else ""}{" completed" if is_completed else ""}">'
         card += f'<div class="section-card-header" onclick="this.nextElementSibling.classList.toggle(\'open\')">'
         card += boss_img
         card += f'<div class="section-info"><div class="section-name">{section["shortName"]}'
@@ -1483,34 +1207,31 @@ def build_friend_view_html(data, base_url):
         card += f'<div class="section-levelcap">Lv.{section["levelCap"]}</div>'
         if badge_html: card += badge_html
         card += '</div>'
-        card += f'<div class="section-card-body{"  open" if is_current else ""}">'
+        card += f'<div class="section-card-body{" open" if is_current else ""}">'
 
         step = 1
         if index > 0:
             card += f'<div class="step-label">Step {step}: Punishment Wheel</div>'
             step += 1
-            sec_pun = next((p for p in active_punishments if len(p) > 4 and p[4].strip() == section["shortName"]), None)
+            sec_pun = next((p for p in active_punishments if len(p) > 4 and p[4] == section["shortName"]), None)
             if sec_pun:
                 card += f'<div class="punishment-spin-result"><div style="flex:1;"><div class="punishment-spin-result-name">Punishment: {sec_pun[1]}</div><div style="color:#ccc;font-size:11px;margin-top:2px;">{sec_pun[2] if len(sec_pun)>2 else ""}</div><div style="font-size:10px;color:#ccc;margin-top:2px;">Until after: {sec_pun[5] if len(sec_pun)>5 else ""}</div></div></div>'
             else:
                 card += '<div style="font-size:11px;color:#555;font-style:italic;padding:4px 0;">No punishment spun yet.</div>'
 
         if game_mode == "solo":
-            card += f'<div class="step-label">Step {step}: Exclude Wheel</div>'
-            step += 1
+            card += f'<div class="step-label">Step {step}: Exclude Wheel</div>'; step += 1
             if spins.get("exclude"):
                 card += f'<div class="spin-result" style="border-left:4px solid #ff4757;"><img src="{pkmn_img(spins["exclude"])}" style="width:44px;height:44px;" onerror="this.onerror=null;"><div><div class="spin-result-label">Excluded</div><div class="spin-result-name">{spins["exclude"]}</div></div></div>'
             else:
                 card += '<div style="font-size:11px;color:#555;font-style:italic;padding:4px 0;">Not yet spun.</div>'
-            card += f'<div class="step-label">Step {step}: Mandate Wheel</div>'
-            step += 1
+            card += f'<div class="step-label">Step {step}: Mandate Wheel</div>'; step += 1
             if spins.get("mandate"):
                 card += f'<div class="spin-result" style="border-left:4px solid #2ed573;"><img src="{pkmn_img(spins["mandate"])}" style="width:44px;height:44px;" onerror="this.onerror=null;"><div><div class="spin-result-label">Mandated</div><div class="spin-result-name">{spins["mandate"]}</div></div></div>'
             else:
                 card += '<div style="font-size:11px;color:#555;font-style:italic;padding:4px 0;">Not yet spun.</div>'
         else:
-            card += f'<div class="step-label">Step {step}: Friend\'s Picks</div>'
-            step += 1
+            card += f'<div class="step-label">Step {step}: Friend\'s Picks</div>'; step += 1
             if spins.get("mandate") and spins.get("exclude"):
                 card += f'<div class="spin-result" style="border-left:4px solid #ff4757;margin-bottom:4px;"><img src="{pkmn_img(spins["exclude"])}" style="width:44px;height:44px;" onerror="this.onerror=null;"><div><div class="spin-result-label">Excluded</div><div class="spin-result-name">{spins["exclude"]}</div></div></div>'
                 card += f'<div class="spin-result" style="border-left:4px solid #2ed573;"><img src="{pkmn_img(spins["mandate"])}" style="width:44px;height:44px;" onerror="this.onerror=null;"><div><div class="spin-result-label">Mandated</div><div class="spin-result-name">{spins["mandate"]}</div></div></div>'
@@ -1519,9 +1240,7 @@ def build_friend_view_html(data, base_url):
                 for idx2, pick in enumerate(sorted(spins["picks"], key=lambda x: x["spinType"])):
                     is_mand = spins.get("mandate") == pick["pokemon"]
                     is_excl = spins.get("exclude") == pick["pokemon"]
-                    mand_class = " pick-mandated" if is_mand else ""
-                    excl_class = " pick-excluded" if is_excl else ""
-                    card += f'<div class="pick-card{mand_class}{excl_class}"><div class="pick-card-label">Option {idx2+1}</div><img src="{pkmn_img(pick["pokemon"])}" style="width:56px;height:56px;" onerror="this.onerror=null;"><div class="pick-card-name">{pick["pokemon"]}</div>'
+                    card += f'<div class="pick-card{" pick-mandated" if is_mand else ""}{" pick-excluded" if is_excl else ""}"><div class="pick-card-label">Option {idx2+1}</div><img src="{pkmn_img(pick["pokemon"])}" style="width:56px;height:56px;" onerror="this.onerror=null;"><div class="pick-card-name">{pick["pokemon"]}</div>'
                     if is_mand: card += '<div class="pick-chosen-label pick-chosen-mandate">&#x2713; Mandated</div>'
                     elif is_excl: card += '<div class="pick-chosen-label pick-chosen-exclude">&#x2717; Excluded</div>'
                     card += '</div>'
@@ -1530,8 +1249,7 @@ def build_friend_view_html(data, base_url):
                 card += '<div style="font-size:11px;color:#555;font-style:italic;padding:4px 0;">Picks not yet generated.</div>'
 
         if section["shortName"] == "Brock":
-            card += f'<div class="step-label">Step {step}: Starter Pokemon</div>'
-            step += 1
+            card += f'<div class="step-label">Step {step}: Starter Pokemon</div>'; step += 1
             oaks = next((r for r in encounter_data.get(section["shortName"], []) if r["name"] == "Oak's Lab"), None)
             starter_pool = oaks["pokemon"] if oaks else STARTERS
             card += '<div class="starter-section"><div class="starter-section-label">&#127981; Oak\'s Lab</div><div class="pkmn-grid">'
@@ -1542,8 +1260,7 @@ def build_friend_view_html(data, base_url):
                 card += f'<div class="pkmn-card {cc}" style="cursor:default;"><img src="{pkmn_img(pn)}" onerror="this.onerror=null;" loading="lazy"><br>{pn}</div>'
             card += '</div></div>'
 
-        card += f'<div class="step-label">Step {step}: Pokemon Caught</div>'
-        step += 1
+        card += f'<div class="step-label">Step {step}: Pokemon Caught</div>'; step += 1
         routes = encounter_data.get(section["shortName"], [])
         catch_routes = [r for r in routes if r["name"] != "Oak's Lab"] if section["shortName"] == "Brock" else routes
         if catch_routes:
@@ -1551,8 +1268,7 @@ def build_friend_view_html(data, base_url):
             for route in catch_routes:
                 route_id = "route-" + route["name"].replace(" ", "-").replace("'", "")
                 caught_here = catch_map.get(route_id)
-                completed_cls = " completed" if caught_here else ""
-                card += f'<div class="route-row{completed_cls}"><div class="route-label">{route["name"]}</div><div class="pkmn-grid">'
+                card += f'<div class="route-row{" completed" if caught_here else ""}"><div class="route-label">{route["name"]}</div><div class="pkmn-grid">'
                 for pn in route["pokemon"]:
                     is_caught = caught_here and caught_here.get("name") == pn
                     cc = "selected" if is_caught else ("locked" if caught_here else "")
@@ -1705,7 +1421,7 @@ POST_ACTIONS = {
 class handler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
-        pass  # suppress default logging
+        pass
 
     def send_json(self, body, status=200):
         encoded = body.encode("utf-8")
@@ -1738,23 +1454,12 @@ class handler(BaseHTTPRequestHandler):
         params = parse_qs(parsed.query)
         action = params.get("action", [""])[0]
 
-        # Special HTML pages via path
         if parsed.path == "/friend":
             html, _ = serve_friend_view_html(params)
             self.send_html(html)
             return
         if parsed.path == "/picks":
             html, _ = serve_picks_html(params)
-            self.send_html(html)
-            return
-
-        # Special HTML pages via action param
-        if action == "servePicks":
-            html, _ = serve_picks_html(params)
-            self.send_html(html)
-            return
-        if action == "serveFriendView":
-            html, _ = serve_friend_view_html(params)
             self.send_html(html)
             return
 
