@@ -983,17 +983,16 @@ def serve_picks_html(params):
                 picks_html += f'<img src="{img_url}" style="width:70px;height:70px;" onerror="this.onerror=null;">'
                 picks_html += f'<div style="font-weight:bold;font-size:14px;margin-top:6px;color:#fff;">{pkmn}</div>'
                 if is_mandated:
-                    picks_html += '<div style="background:#2ed573;color:#000;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">&#10003; Mandated<button onclick="unchoose(\'Mandate\')" style="background:none;border:none;color:#000;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.6;">&#x2715;</button></div>'
+                    picks_html += '<div style="background:#2ed573;color:#000;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">&#10003; Mandated<button onclick="unchoose(&quot;Mandate&quot;)" style="background:none;border:none;color:#000;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.6;">&#x2715;</button></div>'
                 elif is_excluded:
-                    picks_html += '<div style="background:#ff4757;color:#fff;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">&#10007; Excluded<button onclick="unchoose(\'Exclude\')" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.7;">&#x2715;</button></div>'
+                    picks_html += '<div style="background:#ff4757;color:#fff;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">&#10007; Excluded<button onclick="unchoose(&quot;Exclude&quot;)" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.7;">&#x2715;</button></div>'
                 else:
                     picks_html += '<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">'
                     if not mandate:
-                        picks_html += f'<button onclick="choose(\'{safe_pkmn}\',\'Mandate\')" style="background:#2ed573;color:#000;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">&#10003; Mandate</button>'
+                        picks_html += f'<button onclick="choose(&quot;{safe_pkmn}&quot;,&quot;Mandate&quot;)" style="background:#2ed573;color:#000;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">&#10003; Mandate</button>'
                     if not exclude:
-                        picks_html += f'<button onclick="choose(\'{safe_pkmn}\',\'Exclude\')" style="background:#ff4757;color:#fff;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">&#10007; Exclude</button>'
+                        picks_html += f'<button onclick="choose(&quot;{safe_pkmn}&quot;,&quot;Exclude&quot;)" style="background:#ff4757;color:#fff;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">&#10007; Exclude</button>'
                     picks_html += '</div>'
-                picks_html += '</div>'
 
         status_msg = '<div style="background:#1a2e21;border:1px solid #2ed573;border-radius:10px;padding:12px;margin-bottom:16px;color:#2ed573;font-size:13px;text-align:center;">Both picks have been made for this section!</div>' if already_chosen else ""
         api_base = "https://lotto-locke-api.onrender.com"
@@ -1064,8 +1063,8 @@ function renderPicksFromState(state){{
     else if(isExcluded){{html+='<div style="background:#ff4757;color:#fff;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">\u2717 Excluded<button onclick="unchoose(\'Exclude\')" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.7;">&#x2715;</button></div>';}}
     else{{
       html+='<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">';
-      if(!mandate)html+='<button onclick="choose(\''+safePkmn+'\',\'Mandate\')" style="background:#2ed573;color:#000;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">\u2713 Mandate</button>';
-      if(!exclude)html+='<button onclick="choose(\''+safePkmn+'\',\'Exclude\')" style="background:#ff4757;color:#fff;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">\u2717 Exclude</button>';
+      if(!mandate)html+='<button onclick="choose(\\"'+safePkmn+'\\",\\"Mandate\\")" style="background:#2ed573;color:#000;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">\u2713 Mandate</button>';
+      if(!exclude)html+='<button onclick="choose(\\"'+safePkmn+'\\",\\"Exclude\\")" style="background:#ff4757;color:#fff;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">\u2717 Exclude</button>';
       html+='</div>';
     }}
     html+='</div>';
