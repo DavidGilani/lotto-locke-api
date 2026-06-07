@@ -160,7 +160,8 @@ def load_trainer(body):
                     if friend_name not in friends:
                         friends.append(friend_name)
                 if requester == name and status == "accepted":
-                    if recipient not in new_acceptances:
+                    notified = r.get("notified", False)
+                    if not notified and recipient not in new_acceptances:
                         new_acceptances.append(recipient)
         except Exception:
             pass
@@ -179,6 +180,14 @@ def load_trainer(body):
             "friends": friends,
             "newAcceptances": new_acceptances
         })
+    except Exception as e:
+        return err(str(e))
+
+def mark_acceptances_notified(body):
+    try:
+        name = body.get("trainerName", "").strip().lower()
+        db().table("friends").update({"notified": True}).eq("requester", name).eq("status", "accepted").execute()
+        return ok({"success": True})
     except Exception as e:
         return err(str(e))
 
@@ -1091,7 +1100,7 @@ function renderPicksFromState(state) {{
     var html = "";
     picks.forEach(function(pick, idx) {{
         var pkmn = pick.pokemon;
-        var imgName = pkmn.toLowerCase().replace(/\s+/g, "-").replace(/\./g, "").replace(/'/g, "");
+        var imgName = pkmn.toLowerCase().replace(/\\s+/g, "-").replace(/\\./g, "").replace(/'/g, "");
         if (pkmn === "Nidoran\u2640") imgName = "nidoran-f";
         if (pkmn === "Nidoran\u2642") imgName = "nidoran-m";
         var hgUrl = "https://img.pokemondb.net/sprites/heartgold-soulsilver/normal/" + imgName + ".png";
@@ -1468,6 +1477,7 @@ POST_ACTIONS = {
     "acceptFriendRequest": accept_friend_request,
     "declineFriendRequest": decline_friend_request,
     "removeFriend": remove_friend,
+    "markAcceptancesNotified": mark_acceptances_notified,
 }
 
 class handler(BaseHTTPRequestHandler):
