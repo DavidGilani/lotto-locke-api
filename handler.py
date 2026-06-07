@@ -163,8 +163,17 @@ def load_trainer(body):
                     notified = r.get("notified", False)
                     if not notified and recipient not in new_acceptances:
                         new_acceptances.append(recipient)
+                # collect display names for all friends
         except Exception:
             pass
+
+        # Get display names for all friends and pending requesters
+        all_names_to_lookup = list(set(friends + [r["from"] for r in pending_requests] + new_acceptances))
+        display_names_map = {}
+        if all_names_to_lookup:
+            dn_result = db().table("trainers").select("trainer,display_name").in_("trainer", all_names_to_lookup).execute()
+            for dn_row in dn_result.data:
+                display_names_map[dn_row["trainer"]] = dn_row.get("display_name") or dn_row["trainer"]
 
         return ok({
             "success": True,
