@@ -952,9 +952,8 @@ def serve_picks_html(params):
             display_name = trainer_result.data[0].get("display_name") or trainer
             trainer_version = trainer_result.data[0].get("version") or "FireRed"
 
-        base_url = os.environ.get("VERCEL_URL", "")
-        if base_url and not base_url.startswith("http"):
-            base_url = "https://" + base_url
+        base_url = "https://lotto-locke-app.vercel.app"
+        api_base = "https://lotto-locke-api.onrender.com"
 
         mandate = mandate_row["pokemon"] if mandate_row else None
         exclude = exclude_row["pokemon"] if exclude_row else None
@@ -966,10 +965,10 @@ def serve_picks_html(params):
             if name == "Nidoran\u2642": img_name = "nidoran-m"
             return f"https://img.pokemondb.net/sprites/heartgold-soulsilver/normal/{img_name}.png"
 
-        picks_html = ""
-        if not picks:
-            picks_html = '<p style="color:#aaa;text-align:center;">No picks have been generated for this section yet.</p>'
-        else:
+        def build_picks_html(picks, mandate, exclude):
+            if not picks:
+                return '<p style="color:#aaa;text-align:center;">No picks have been generated for this section yet.</p>'
+            html = ""
             for idx, pick_row in enumerate(picks):
                 pkmn = pick_row["pokemon"]
                 img_url = pkmn_img(pkmn)
@@ -977,35 +976,38 @@ def serve_picks_html(params):
                 is_excluded = exclude == pkmn
                 border = "#2ed573" if is_mandated else ("#ff4757" if is_excluded else "#444")
                 bg = "#1a2e21" if is_mandated else ("#2e1a1a" if is_excluded else "#2a2a2a")
-                safe_pkmn = pkmn.replace("\\", "\\\\").replace("'", "\\'")
-                picks_html += f'<div style="background:{bg};border-radius:14px;padding:16px;text-align:center;border:2px solid {border};flex:1;min-width:110px;max-width:160px;">'
-                picks_html += f'<div style="color:#aaa;font-size:11px;margin-bottom:6px;">Option {idx+1}</div>'
-                picks_html += f'<img src="{img_url}" style="width:70px;height:70px;" onerror="this.onerror=null;">'
-                picks_html += f'<div style="font-weight:bold;font-size:14px;margin-top:6px;color:#fff;">{pkmn}</div>'
+                html += f'<div style="background:{bg};border-radius:14px;padding:16px;text-align:center;border:2px solid {border};flex:1;min-width:110px;max-width:160px;">'
+                html += f'<div style="color:#aaa;font-size:11px;margin-bottom:6px;">Option {idx+1}</div>'
+                html += f'<img src="{img_url}" style="width:70px;height:70px;" onerror="this.onerror=null;">'
+                html += f'<div style="font-weight:bold;font-size:14px;margin-top:6px;color:#fff;">{pkmn}</div>'
                 if is_mandated:
-                    picks_html += '<div style="background:#2ed573;color:#000;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">&#10003; Mandated<button onclick="unchoose(&quot;Mandate&quot;)" style="background:none;border:none;color:#000;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.6;">&#x2715;</button></div>'
+                    html += f'<div style="background:#2ed573;color:#000;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">&#10003; Mandated<button class="unchoose-btn" data-type="Mandate" style="background:none;border:none;color:#000;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.6;">&#x2715;</button></div>'
                 elif is_excluded:
-                    picks_html += '<div style="background:#ff4757;color:#fff;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">&#10007; Excluded<button onclick="unchoose(&quot;Exclude&quot;)" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.7;">&#x2715;</button></div>'
+                    html += f'<div style="background:#ff4757;color:#fff;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">&#10007; Excluded<button class="unchoose-btn" data-type="Exclude" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.7;">&#x2715;</button></div>'
                 else:
-                    picks_html += '<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">'
+                    html += '<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">'
                     if not mandate:
-                        picks_html += f'<button onclick="choose(&quot;{safe_pkmn}&quot;,&quot;Mandate&quot;)" style="background:#2ed573;color:#000;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">&#10003; Mandate</button>'
+                        html += f'<button class="choose-btn" data-pkmn="{pkmn}" data-type="Mandate" style="background:#2ed573;color:#000;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">&#10003; Mandate</button>'
                     if not exclude:
-                        picks_html += f'<button onclick="choose(&quot;{safe_pkmn}&quot;,&quot;Exclude&quot;)" style="background:#ff4757;color:#fff;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">&#10007; Exclude</button>'
-                    picks_html += '</div>'
+                        html += f'<button class="choose-btn" data-pkmn="{pkmn}" data-type="Exclude" style="background:#ff4757;color:#fff;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">&#10007; Exclude</button>'
+                    html += '</div>'
+                html += '</div>'
+            return html
 
+        picks_html = build_picks_html(picks, mandate, exclude)
         status_msg = '<div style="background:#1a2e21;border:1px solid #2ed573;border-radius:10px;padding:12px;margin-bottom:16px;color:#2ed573;font-size:13px;text-align:center;">Both picks have been made for this section!</div>' if already_chosen else ""
-        api_base = "https://lotto-locke-api.onrender.com"
 
         html = f'''<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{{margin:0;padding:0;background:#1a1a1a;color:white;font-family:'Segoe UI',sans-serif;}}
+<style>
+body{{margin:0;padding:0;background:#1a1a1a;color:white;font-family:'Segoe UI',sans-serif;}}
 .container{{max-width:560px;margin:0 auto;padding:20px 14px;}}
 h1{{color:#ff4757;font-size:20px;margin-bottom:4px;}}
 .subtitle{{color:#aaa;font-size:13px;margin-bottom:18px;}}
 .picks-row{{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-bottom:16px;}}
 .start-btn{{display:block;max-width:280px;margin:24px auto 0;padding:14px;background:#ff4757;color:white;border:none;border-radius:12px;font-size:14px;font-weight:bold;cursor:pointer;text-align:center;text-decoration:none;}}
 #status{{color:#2ed573;font-size:13px;margin-top:10px;text-align:center;min-height:20px;}}
-</style></head><body>
+</style>
+</head><body>
 <div class="container">
 <h1>Pokemon Lotto-Locke</h1>
 <div class="subtitle">{display_name}'s picks for <strong style="color:#fff;">{section_name}</strong></div>
@@ -1016,65 +1018,120 @@ h1{{color:#ff4757;font-size:20px;margin-bottom:4px;}}
 <a href="{base_url}" class="start-btn">&#127918; Start Your Own Adventure</a>
 </div>
 <script>
-var API_BASE="{api_base}";
-var TRAINER="{trainer}";
-var SECTION="{section_name}";
-var VERSION="{trainer_version}";
-function choose(pkmn,spinType){{
-  var btns=document.querySelectorAll("button");for(var i=0;i<btns.length;i++)btns[i].disabled=true;
-  document.getElementById("status").innerText="Saving...";
-  fetch(API_BASE+"?action=saveJourneyResult",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{trainerName:TRAINER,sectionName:SECTION,spinType:spinType,pokemon:pkmn,version:VERSION}})}})
-  .then(function(){{return fetch(API_BASE+"?action=getPicksState&trainer="+encodeURIComponent(TRAINER)+"&section="+encodeURIComponent(SECTION));}})
-  .then(function(r){{return r.json();}})
-  .then(function(state){{renderPicksFromState(state);document.getElementById("status").innerText="";}})
-  .catch(function(){{document.getElementById("status").innerText="Error saving. Please refresh the page.";}});
+var API_BASE = "{api_base}";
+var TRAINER = "{trainer}";
+var SECTION = "{section_name}";
+var VERSION = "{trainer_version}";
+
+function setStatus(msg) {{
+    document.getElementById("status").innerText = msg;
 }}
-function unchoose(spinType){{
-  var btns=document.querySelectorAll("button");for(var i=0;i<btns.length;i++)btns[i].disabled=true;
-  document.getElementById("status").innerText="Removing...";
-  fetch(API_BASE+"?action=deleteJourneyResult",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{trainerName:TRAINER,sectionName:SECTION,spinType:spinType}})}})
-  .then(function(){{return fetch(API_BASE+"?action=getPicksState&trainer="+encodeURIComponent(TRAINER)+"&section="+encodeURIComponent(SECTION));}})
-  .then(function(r){{return r.json();}})
-  .then(function(state){{renderPicksFromState(state);document.getElementById("status").innerText="";}})
-  .catch(function(){{document.getElementById("status").innerText="Error. Please refresh the page.";}});
+
+function disableButtons() {{
+    var btns = document.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
 }}
-function renderPicksFromState(state){{
-  var picks=state.picks||[];
-  var mandate=state.mandate;
-  var exclude=state.exclude;
-  var allChosen=mandate&&exclude;
-  var html="";
-  picks.forEach(function(pick,idx){{
-    var pkmn=pick.pokemon;
-    var imgName=pkmn.toLowerCase().replace(/\\s+/g,"-").replace(/\\./g,"").replace(/'/g,"");
-    if(pkmn==="Nidoran\u2640")imgName="nidoran-f";
-    if(pkmn==="Nidoran\u2642")imgName="nidoran-m";
-    var hgUrl="https://img.pokemondb.net/sprites/heartgold-soulsilver/normal/"+imgName+".png";
-    var isMandated=mandate===pkmn;
-    var isExcluded=exclude===pkmn;
-    var border=isMandated?"#2ed573":(isExcluded?"#ff4757":"#444");
-    var bg=isMandated?"#1a2e21":(isExcluded?"#2e1a1a":"#2a2a2a");
-    html+='<div style="background:'+bg+';border-radius:14px;padding:16px;text-align:center;border:2px solid '+border+';flex:1;min-width:110px;max-width:160px;">';
-    html+='<div style="color:#aaa;font-size:11px;margin-bottom:6px;">Option '+(idx+1)+'</div>';
-    html+='<img src="'+hgUrl+'" style="width:70px;height:70px;" onerror="this.onerror=null;">';
-    html+='<div style="font-weight:bold;font-size:14px;margin-top:6px;color:#fff;">'+pkmn+'</div>';
-    var safePkmn=pkmn.replace(/\x27/g,"\\x27");
-    if(isMandated){{html+='<div style="background:#2ed573;color:#000;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">\u2713 Mandated<button onclick="unchoose(\'Mandate\')" style="background:none;border:none;color:#000;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.6;">&#x2715;</button></div>';}}
-    else if(isExcluded){{html+='<div style="background:#ff4757;color:#fff;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">\u2717 Excluded<button onclick="unchoose(\'Exclude\')" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.7;">&#x2715;</button></div>';}}
-    else{{
-      html+='<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">';
-      if(!mandate)html+='<button onclick="choose(\\"'+safePkmn+'\\",\\"Mandate\\")" style="background:#2ed573;color:#000;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">\u2713 Mandate</button>';
-      if(!exclude)html+='<button onclick="choose(\\"'+safePkmn+'\\",\\"Exclude\\")" style="background:#ff4757;color:#fff;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">\u2717 Exclude</button>';
-      html+='</div>';
+
+function choose(pkmn, spinType) {{
+    disableButtons();
+    setStatus("Saving...");
+    fetch(API_BASE + "?action=saveJourneyResult", {{
+        method: "POST",
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify({{trainerName: TRAINER, sectionName: SECTION, spinType: spinType, pokemon: pkmn, version: VERSION}})
+    }})
+    .then(function() {{
+        return fetch(API_BASE + "?action=getPicksState&trainer=" + encodeURIComponent(TRAINER) + "&section=" + encodeURIComponent(SECTION));
+    }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(state) {{
+        renderPicksFromState(state);
+        setStatus("");
+    }})
+    .catch(function() {{ setStatus("Error saving. Please refresh the page."); }});
+}}
+
+function unchoose(spinType) {{
+    disableButtons();
+    setStatus("Removing...");
+    fetch(API_BASE + "?action=deleteJourneyResult", {{
+        method: "POST",
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify({{trainerName: TRAINER, sectionName: SECTION, spinType: spinType}})
+    }})
+    .then(function() {{
+        return fetch(API_BASE + "?action=getPicksState&trainer=" + encodeURIComponent(TRAINER) + "&section=" + encodeURIComponent(SECTION));
+    }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(state) {{
+        renderPicksFromState(state);
+        setStatus("");
+    }})
+    .catch(function() {{ setStatus("Error. Please refresh the page."); }});
+}}
+
+function attachListeners() {{
+    document.querySelectorAll(".choose-btn").forEach(function(btn) {{
+        btn.addEventListener("click", function() {{
+            choose(this.getAttribute("data-pkmn"), this.getAttribute("data-type"));
+        }});
+    }});
+    document.querySelectorAll(".unchoose-btn").forEach(function(btn) {{
+        btn.addEventListener("click", function() {{
+            unchoose(this.getAttribute("data-type"));
+        }});
+    }});
+}}
+
+function renderPicksFromState(state) {{
+    var picks = state.picks || [];
+    var mandate = state.mandate;
+    var exclude = state.exclude;
+    var allChosen = mandate && exclude;
+    var html = "";
+    picks.forEach(function(pick, idx) {{
+        var pkmn = pick.pokemon;
+        var imgName = pkmn.toLowerCase().replace(/\s+/g, "-").replace(/\./g, "").replace(/'/g, "");
+        if (pkmn === "Nidoran\u2640") imgName = "nidoran-f";
+        if (pkmn === "Nidoran\u2642") imgName = "nidoran-m";
+        var hgUrl = "https://img.pokemondb.net/sprites/heartgold-soulsilver/normal/" + imgName + ".png";
+        var isMandated = mandate === pkmn;
+        var isExcluded = exclude === pkmn;
+        var border = isMandated ? "#2ed573" : (isExcluded ? "#ff4757" : "#444");
+        var bg = isMandated ? "#1a2e21" : (isExcluded ? "#2e1a1a" : "#2a2a2a");
+        html += '<div style="background:' + bg + ';border-radius:14px;padding:16px;text-align:center;border:2px solid ' + border + ';flex:1;min-width:110px;max-width:160px;">';
+        html += '<div style="color:#aaa;font-size:11px;margin-bottom:6px;">Option ' + (idx+1) + '</div>';
+        html += '<img src="' + hgUrl + '" style="width:70px;height:70px;" onerror="this.onerror=null;">';
+        html += '<div style="font-weight:bold;font-size:14px;margin-top:6px;color:#fff;">' + pkmn + '</div>';
+        if (isMandated) {{
+            html += '<div style="background:#2ed573;color:#000;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">\u2713 Mandated<button class="unchoose-btn" data-type="Mandate" style="background:none;border:none;color:#000;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.6;">&#x2715;</button></div>';
+        }} else if (isExcluded) {{
+            html += '<div style="background:#ff4757;color:#fff;padding:4px 8px;border-radius:8px;font-size:11px;font-weight:bold;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;">\u2717 Excluded<button class="unchoose-btn" data-type="Exclude" style="background:none;border:none;color:#fff;font-size:14px;cursor:pointer;padding:0;line-height:1;opacity:0.7;">&#x2715;</button></div>';
+        }} else {{
+            html += '<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">';
+            if (!mandate) html += '<button class="choose-btn" data-pkmn="' + pkmn + '" data-type="Mandate" style="background:#2ed573;color:#000;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">\u2713 Mandate</button>';
+            if (!exclude) html += '<button class="choose-btn" data-pkmn="' + pkmn + '" data-type="Exclude" style="background:#ff4757;color:#fff;border:none;border-radius:6px;padding:7px;font-weight:bold;cursor:pointer;font-size:11px;">\u2717 Exclude</button>';
+            html += '</div>';
+        }}
+        html += '</div>';
+    }});
+    document.getElementById("picks-row").innerHTML = html;
+    attachListeners();
+    if (allChosen) {{
+        var existing = document.getElementById("all-chosen-msg");
+        if (!existing) {{
+            var msg = document.createElement("div");
+            msg.id = "all-chosen-msg";
+            msg.style = "background:#1a2e21;border:1px solid #2ed573;border-radius:10px;padding:12px;margin-bottom:16px;color:#2ed573;font-size:13px;text-align:center;";
+            msg.innerText = "Both picks have been made for this section!";
+            document.getElementById("picks-row").parentNode.insertBefore(msg, document.getElementById("picks-row"));
+        }}
     }}
-    html+='</div>';
-  }});
-  document.getElementById("picks-row").innerHTML=html;
-  if(allChosen){{
-    var existing=document.getElementById("all-chosen-msg");
-    if(!existing){{var msg=document.createElement("div");msg.id="all-chosen-msg";msg.style="background:#1a2e21;border:1px solid #2ed573;border-radius:10px;padding:12px;margin-bottom:16px;color:#2ed573;font-size:13px;text-align:center;";msg.innerText="Both picks have been made for this section!";document.getElementById("picks-row").parentNode.insertBefore(msg,document.getElementById("picks-row"));}}
-  }}
 }}
+
+document.addEventListener("DOMContentLoaded", function() {{
+    attachListeners();
+}});
 </script>
 </body></html>'''
         return html, "text/html"
