@@ -996,9 +996,7 @@ def serve_picks_html(params):
                 picks_html += '</div>'
 
         status_msg = '<div style="background:#1a2e21;border:1px solid #2ed573;border-radius:10px;padding:12px;margin-bottom:16px;color:#2ed573;font-size:13px;text-align:center;">Both picks have been made for this section!</div>' if already_chosen else ""
-        api_base = os.environ.get("RENDER_URL", base_url)
-        if not api_base.endswith("/api"):
-            api_base = api_base.rstrip("/") + "/api"
+        api_base = "https://lotto-locke-api.onrender.com"
 
         html = f'''<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>body{{margin:0;padding:0;background:#1a1a1a;color:white;font-family:'Segoe UI',sans-serif;}}
@@ -1105,9 +1103,7 @@ def serve_friend_view_html(params):
         if "error" in data:
             return f"<html><body style='background:#1a1a1a;color:white;padding:30px;text-align:center;'><h2>Error</h2><p>{data['error']}</p></body></html>", "text/html"
 
-        base_url = os.environ.get("VERCEL_URL", "")
-        if base_url and not base_url.startswith("http"):
-            base_url = "https://" + base_url
+        base_url = "https://lotto-locke-app.vercel.app"
 
         html = build_friend_view_html(data, base_url)
         return html, "text/html"
