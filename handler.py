@@ -170,10 +170,14 @@ def load_trainer(body):
         # Get display names for all friends and pending requesters
         all_names_to_lookup = list(set(friends + [r["from"] for r in pending_requests] + new_acceptances))
         display_names_map = {}
-        if all_names_to_lookup:
-            dn_result = db().table("trainers").select("trainer,display_name").in_("trainer", all_names_to_lookup).execute()
-            for dn_row in dn_result.data:
-                display_names_map[dn_row["trainer"]] = dn_row.get("display_name") or dn_row["trainer"]
+        try:
+            if all_names_to_lookup:
+                dn_result = db().table("trainers").select("trainer,display_name").execute()
+                for dn_row in dn_result.data:
+                    if dn_row["trainer"] in all_names_to_lookup:
+                        display_names_map[dn_row["trainer"]] = dn_row.get("display_name") or dn_row["trainer"]
+        except Exception:
+            pass
 
         return ok({
             "success": True,
