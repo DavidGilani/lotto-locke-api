@@ -1073,6 +1073,28 @@ def get_journey_image_data(params):
                 slots = [r[f"slot{i}"] for i in range(1,7) if r.get(f"slot{i}")]
                 boss_teams[sec] = slots
 
+        # Build punishments active during each section
+        pun_data = db().table("punishment_results").select("*").eq("trainer", trainer).execute()
+        section_names = [s["shortName"] for s in sections]
+        punishments_by_section = {}
+        for p in pun_data.data:
+            section_spun_raw = p.get("section_spun", "")
+            # strip -fainted- or -extra suffixes to get the base section name
+            import re as _re
+            base_spun = _re.split(r'-(fainted|extra)', section_spun_raw)[0]
+            expires = p.get("expires_after_section", "")
+            pun_name = p.get("punishment", "")
+            try:
+                spun_idx = section_names.index(base_spun) if base_spun in section_names else -1
+                exp_idx = section_names.index(expires) if expires in section_names else len(section_names) - 1
+            except ValueError:
+                continue
+            for i in range(max(spun_idx, 0), exp_idx + 1):
+                sec_name = section_names[i]
+                punishments_by_section.setdefault(sec_name, [])
+                if pun_name not in punishments_by_section[sec_name]:
+                    punishments_by_section[sec_name].append(pun_name)
+
         return ok({
             "displayName": display_name,
             "version": version,
@@ -1080,7 +1102,8 @@ def get_journey_image_data(params):
             "spinMap": spin_map,
             "catchesBySection": catches_by_section,
             "bossTeams": boss_teams,
-            "graveyardNoSection": graveyard_no_section
+            "graveyardNoSection": graveyard_no_section,
+            "punishmentsBySection": punishments_by_section
         })
     except Exception as e:
         return err(str(e))
