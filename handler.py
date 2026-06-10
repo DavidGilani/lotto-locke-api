@@ -233,20 +233,22 @@ def get_encounter_data(params):
     try:
         version = params.get("version", ["FireRed"])[0]
         result = db().table("master_encounters").select("*").in_("version", ["Both", version]).order("id").execute()
-        structured = []
-        current_section = None
+        section_order = []
+        section_map = {}
         for r in result.data:
             section_name = r["section"]
             route_name = r["route"]
             pkmn_name = r["pokemon"]
-            if not current_section or current_section["name"] != section_name:
-                current_section = {"name": section_name, "routes": []}
-                structured.append(current_section)
-            route_entry = next((rt for rt in current_section["routes"] if rt["name"] == route_name), None)
-            if not route_entry:
+            if section_name not in section_map:
+                section_map[section_name] = {"name": section_name, "routes": [], "route_map": {}}
+                section_order.append(section_name)
+            sec = section_map[section_name]
+            if route_name not in sec["route_map"]:
                 route_entry = {"name": route_name, "pokemon": []}
-                current_section["routes"].append(route_entry)
-            route_entry["pokemon"].append(pkmn_name)
+                sec["routes"].append(route_entry)
+                sec["route_map"][route_name] = route_entry
+            sec["route_map"][route_name]["pokemon"].append(pkmn_name)
+        structured = [{"name": s["name"], "routes": s["routes"]} for s in [section_map[n] for n in section_order]]
         return ok(structured)
     except Exception as e:
         return err(str(e))
@@ -776,16 +778,19 @@ def get_friend_view_data(params):
 
         enc_result = db().table("master_encounters").select("*").in_("version", ["Both", version]).order("id").execute()
         encounter_data = {}
+        encounter_route_map = {}
         for r in enc_result.data:
             sec = r["section"]
             route_name = r["route"]
             pkmn_name = r["pokemon"]
-            encounter_data.setdefault(sec, [])
-            route_entry = next((rt for rt in encounter_data[sec] if rt["name"] == route_name), None)
-            if not route_entry:
+            if sec not in encounter_data:
+                encounter_data[sec] = []
+                encounter_route_map[sec] = {}
+            if route_name not in encounter_route_map[sec]:
                 route_entry = {"name": route_name, "pokemon": []}
                 encounter_data[sec].append(route_entry)
-            route_entry["pokemon"].append(pkmn_name)
+                encounter_route_map[sec][route_name] = route_entry
+            encounter_route_map[sec][route_name]["pokemon"].append(pkmn_name)
 
         bbl_result = db().table("boss_battle_log").select("section").eq("trainer", friend_name).eq("result", "Defeated").execute()
         defeated_sections = []
