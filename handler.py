@@ -122,6 +122,7 @@ def load_trainer(body):
                 "name": r["pokemon"],
                 "version": r.get("version", ""),
                 "fainted": r.get("status", "") == "fainted",
+                "faintedInSection": r.get("fainted_in_section", ""),
                 "originalName": r.get("original_pokemon", ""),
                 "traded": r.get("trade_status", "") == "traded"
             }
@@ -550,7 +551,13 @@ def save_fainted_pokemon(body):
         route_id = body.get("routeId", "").strip()
         pkmn_name = body.get("pkmnName", "").strip()
         fainted = body.get("fainted", False)
-        db().table("trainer_catches").update({"status": "fainted" if fainted else ""}).eq("trainer", trainer).eq("route_id", route_id).eq("pokemon", pkmn_name).execute()
+        fainted_in_section = body.get("faintedInSection", "")
+        update_data = {"status": "fainted" if fainted else ""}
+        if fainted and fainted_in_section:
+            update_data["fainted_in_section"] = fainted_in_section
+        elif not fainted:
+            update_data["fainted_in_section"] = ""
+        db().table("trainer_catches").update(update_data).eq("trainer", trainer).eq("route_id", route_id).eq("pokemon", pkmn_name).execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
@@ -979,6 +986,78 @@ def get_web_app_url(params):
 # ============================================================
 # PICKS STATE
 # ============================================================
+
+def get_journey_image_data(params):
+    try:
+        trainer = params.get("trainerName", [""])[0].strip().lower()
+
+        trainer_result = db().table("trainers").select("display_name,version,game_mode").eq("trainer", trainer).execute()
+        if not trainer_result.data:
+            return err("Trainer not found.")
+        row = trainer_result.data[0]
+        display_name = row.get("display_name") or trainer
+        version = row.get("version") or "FireRed"
+
+        sections_result = db().table("sections").select("*").order("id").execute()
+        sections = [{"shortName": r["short_name"], "fullName": r.get("full_name",""), "levelCap": r.get("level_cap",""), "bossImage": r.get("boss_image","")} for r in sections_result.data]
+
+        journey_data = db().table("journey_results").select("*").eq("trainer", trainer).execute()
+        spin_map = {}
+        for r in journey_data.data:
+            sec = r["section"]
+            spin_map.setdefault(sec, {})
+            if r["spin_type"] == "Mandate":
+                spin_map[sec]["mandate"] = r["pokemon"]
+            elif r["spin_type"] == "Exclude":
+                spin_map[sec]["exclude"] = r["pokemon"]
+
+        catches_data = db().table("trainer_catches").select("*").eq("trainer", trainer).execute()
+        enc_result = db().table("master_encounters").select("section,route,pokemon").in_("version", ["Both", version]).execute()
+        route_to_section = {}
+        for r in enc_result.data:
+            route_id = "route-" + r["route"].replace(" ", "-").replace("'", "")
+            route_to_section[route_id] = r["section"]
+        route_to_section["route-oaks-lab"] = "Brock"
+
+        catches_by_section = {}
+        graveyard_no_section = []
+        for r in catches_data.data:
+            route_id = r["route_id"]
+            sec = route_to_section.get(route_id, "")
+            entry = {
+                "name": r["pokemon"],
+                "route": route_id,
+                "fainted": r.get("status","") == "fainted",
+                "faintedInSection": r.get("fainted_in_section",""),
+                "traded": r.get("trade_status","") == "traded",
+                "originalName": r.get("original_pokemon","")
+            }
+            if sec:
+                catches_by_section.setdefault(sec, [])
+                catches_by_section[sec].append(entry)
+            else:
+                graveyard_no_section.append(entry)
+
+        bbl_data = db().table("boss_battle_log").select("*").eq("trainer", trainer).execute()
+        boss_teams = {}
+        for r in bbl_data.data:
+            sec = r["section"]
+            result = r.get("result","")
+            if result == "Defeated" and sec not in boss_teams:
+                slots = [r[f"slot{i}"] for i in range(1,7) if r.get(f"slot{i}")]
+                boss_teams[sec] = slots
+
+        return ok({
+            "displayName": display_name,
+            "version": version,
+            "sections": sections,
+            "spinMap": spin_map,
+            "catchesBySection": catches_by_section,
+            "bossTeams": boss_teams,
+            "graveyardNoSection": graveyard_no_section
+        })
+    except Exception as e:
+        return err(str(e))
 
 def get_picks_state(params):
     try:
@@ -1515,6 +1594,7 @@ GET_ACTIONS = {
     "getFriendViewData": get_friend_view_data,
     "getFriendShareUrl": get_friend_share_url,
     "getPicksState": get_picks_state,
+    "getJourneyImageData": get_journey_image_data,
 }
 
 POST_ACTIONS = {
