@@ -963,6 +963,24 @@ def mark_pick_notifications_viewed(body):
     except Exception as e:
         return err(str(e))
 
+def get_sprite_base64(params):
+    try:
+        import urllib.request
+        name = params.get("name", [""])[0].strip()
+        if not name:
+            return err("No name provided.")
+        img_name = name.lower().replace(" ", "-").replace(".", "").replace("'", "")
+        if name == "Nidoran\u2640": img_name = "nidoran-f"
+        if name == "Nidoran\u2642": img_name = "nidoran-m"
+        url = f"https://img.pokemondb.net/sprites/heartgold-soulsilver/normal/{img_name}.png"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            import base64
+            data = base64.b64encode(resp.read()).decode("utf-8")
+        return ok({"base64": "data:image/png;base64," + data})
+    except Exception as e:
+        return ok({"base64": ""})
+
 def log_image_error(body):
     try:
         db().table("errors").insert({
@@ -1595,6 +1613,7 @@ GET_ACTIONS = {
     "getFriendShareUrl": get_friend_share_url,
     "getPicksState": get_picks_state,
     "getJourneyImageData": get_journey_image_data,
+    "getSpriteBase64": get_sprite_base64,
 }
 
 POST_ACTIONS = {
