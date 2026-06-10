@@ -136,7 +136,8 @@ def load_trainer(body):
                 "fullText": r.get("full_text", ""),
                 "duration": r.get("duration", 1),
                 "sectionSpun": r.get("section_spun", ""),
-                "expiresAfterSection": r.get("expires_after_section", "")
+                "expiresAfterSection": r.get("expires_after_section", ""),
+                "faintedKey": r.get("fainted_key", "")
             }
             for r in pun_data.data
         ]
@@ -608,7 +609,8 @@ def save_punishment_result(body):
             "full_text": body.get("fullText", ""),
             "duration": body.get("duration", 1),
             "section_spun": body.get("sectionSpun", ""),
-            "expires_after_section": body.get("expiresAfterSection", "")
+            "expires_after_section": body.get("expiresAfterSection", ""),
+            "fainted_key": body.get("faintedKey", "")
         }).execute()
         return ok({"success": True})
     except Exception as e:
