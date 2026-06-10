@@ -1041,18 +1041,26 @@ def get_journey_image_data(params):
         graveyard_no_section = []
         for r in catches_data.data:
             route_id = r["route_id"]
-            sec = route_to_section.get(route_id, "")
+            catch_sec = route_to_section.get(route_id, "")
+            fainted = r.get("status","") == "fainted"
+            fainted_in_section = r.get("fainted_in_section","")
             entry = {
                 "name": r["pokemon"],
                 "route": route_id,
-                "fainted": r.get("status","") == "fainted",
-                "faintedInSection": r.get("fainted_in_section",""),
+                "fainted": fainted,
+                "faintedInSection": fainted_in_section,
                 "traded": r.get("trade_status","") == "traded",
                 "originalName": r.get("original_pokemon","")
             }
-            if sec:
-                catches_by_section.setdefault(sec, [])
-                catches_by_section[sec].append(entry)
+            # Fainted pokemon appear under the section they fainted in,
+            # alive pokemon appear under the section they were caught in
+            if fainted:
+                display_sec = fainted_in_section if fainted_in_section else catch_sec
+            else:
+                display_sec = catch_sec
+            if display_sec:
+                catches_by_section.setdefault(display_sec, [])
+                catches_by_section[display_sec].append(entry)
             else:
                 graveyard_no_section.append(entry)
 
