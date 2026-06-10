@@ -179,6 +179,20 @@ def load_trainer(body):
         except Exception:
             pass
 
+        # Pick notifications
+        pick_notifications = []
+        try:
+            notif_result = db().table("notifications").select("*").eq("recipient", name).eq("viewed", False).execute()
+            for n in notif_result.data:
+                sender_dn = display_names_map.get(n["sender"], n["sender"])
+                pick_notifications.append({
+                    "sender": n["sender"],
+                    "senderDisplayName": sender_dn,
+                    "section": n["section"]
+                })
+        except Exception:
+            pass
+
         return ok({
             "success": True,
             "trainerName": name,
@@ -191,7 +205,8 @@ def load_trainer(body):
             "punishments": trainer_punishments,
             "pendingRequests": pending_requests,
             "friends": friends,
-            "newAcceptances": new_acceptances
+            "newAcceptances": new_acceptances,
+            "pickNotifications": pick_notifications
         })
     except Exception as e:
         return err(str(e))
@@ -914,6 +929,31 @@ def get_friend_share_url(params):
     except Exception as e:
         return err(str(e))
 
+def send_pick_notification(body):
+    try:
+        sender = body.get("senderName", "").strip().lower()
+        recipient = body.get("recipientName", "").strip().lower()
+        section = body.get("sectionName", "").strip()
+        if not sender or not recipient or not section:
+            return err("Missing fields.")
+        db().table("notifications").insert({
+            "sender": sender,
+            "recipient": recipient,
+            "section": section,
+            "viewed": False
+        }).execute()
+        return ok({"success": True})
+    except Exception as e:
+        return err(str(e))
+
+def mark_pick_notifications_viewed(body):
+    try:
+        recipient = body.get("trainerName", "").strip().lower()
+        db().table("notifications").update({"viewed": True}).eq("recipient", recipient).eq("viewed", False).execute()
+        return ok({"success": True})
+    except Exception as e:
+        return err(str(e))
+
 def log_image_error(body):
     try:
         db().table("errors").insert({
@@ -1496,6 +1536,8 @@ POST_ACTIONS = {
     "declineFriendRequest": decline_friend_request,
     "removeFriend": remove_friend,
     "markAcceptancesNotified": mark_acceptances_notified,
+    "sendPickNotification": send_pick_notification,
+    "markPickNotificationsViewed": mark_pick_notifications_viewed,
 }
 
 class handler(BaseHTTPRequestHandler):
