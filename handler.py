@@ -1513,16 +1513,23 @@ function startGeneration(){{
 function renderFinal(data,sourceDiv,base64Map,urlBase64Map,grayBase64Map){{
   setStatus('Rendering image, almost done&hellip;');
   sourceDiv.innerHTML=buildJourneyImageHtml(data,base64Map,urlBase64Map,grayBase64Map);
-  // The preview container must be visible (not display:none) BEFORE html2canvas captures it -
-  // an element inside a display:none ancestor has no real layout, so html2canvas measures it
-  // as 0x0 and silently produces an empty canvas, even though the DOM content is correct.
-  document.getElementById('preview-wrap').style.display='flex';
-  document.getElementById('preview-wrap').style.visibility='hidden';
+  // The preview container must have real layout AND be genuinely paintable BEFORE html2canvas
+  // captures it. display:none gives it no layout (0x0 canvas). visibility:hidden gives it
+  // layout but suppresses paint, which html2canvas faithfully reproduces as a blank capture.
+  // Moving it off-screen (still display:flex, still visibility:visible) avoids both problems:
+  // it has real size AND is genuinely rendered, just not within the visible viewport.
+  var previewWrap=document.getElementById('preview-wrap');
+  previewWrap.style.display='flex';
+  previewWrap.style.position='fixed';
+  previewWrap.style.top='0';
+  previewWrap.style.left='-99999px';
   setTimeout(function(){{
     html2canvas(sourceDiv,{{backgroundColor:'#1a1a1a',scale:2,useCORS:false,allowTaint:false,logging:true}}).then(function(canvas){{
       finalCanvas=canvas;
+      previewWrap.style.position='';
+      previewWrap.style.top='';
+      previewWrap.style.left='';
       document.getElementById('status').style.display='none';
-      document.getElementById('preview-wrap').style.visibility='visible';
       document.getElementById('bottom-bar').style.display='block';
       document.getElementById('top-download-btn').disabled=false;
       fitPreviewToScreen();
