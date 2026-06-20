@@ -982,6 +982,30 @@ def get_sprite_base64(params):
     except Exception as e:
         return ok({"base64": ""})
 
+# Generic image proxy - fetches an arbitrary external image URL server-side and
+# returns it as base64, so the frontend can embed it without canvas-tainting it
+# during journey image generation (boss images, badge images, etc.)
+ALLOWED_IMAGE_HOSTS = ("archives.bulbagarden.net", "img.pokemondb.net", "raw.githubusercontent.com")
+
+def get_image_proxy(params):
+    try:
+        import urllib.request
+        from urllib.parse import urlparse
+        url = params.get("url", [""])[0].strip()
+        if not url:
+            return err("No url provided.")
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or parsed.hostname not in ALLOWED_IMAGE_HOSTS:
+            return ok({"base64": ""})
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            import base64
+            content_type = resp.headers.get("Content-Type", "image/png")
+            data = base64.b64encode(resp.read()).decode("utf-8")
+        return ok({"base64": f"data:{content_type};base64," + data})
+    except Exception as e:
+        return ok({"base64": ""})
+
 def log_image_error(body):
     try:
         db().table("errors").insert({
@@ -1646,6 +1670,7 @@ GET_ACTIONS = {
     "getPicksState": get_picks_state,
     "getJourneyImageData": get_journey_image_data,
     "getSpriteBase64": get_sprite_base64,
+    "getImageProxy": get_image_proxy,
 }
 
 POST_ACTIONS = {
