@@ -1187,6 +1187,341 @@ def get_picks_state(params):
 # SERVE PICKS PAGE
 # ============================================================
 
+def serve_journey_image_html(params):
+    try:
+        trainer = params.get("trainer", [""])[0].strip().lower()
+        if not trainer:
+            return "<html><body style='background:#1a1a1a;color:white;padding:30px;text-align:center;'><h2>No trainer specified</h2></body></html>", "text/html"
+
+        trainer_js = json.dumps(trainer)
+        base_url = "https://lotto-locke-app.vercel.app"
+        api_base = "https://lotto-locke-api.onrender.com"
+
+        html = f'''<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lotto-Locke Journey</title>
+<style>
+html,body{{margin:0;padding:0;background:#111;color:#aaa;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;}}
+.top-bar{{position:sticky;top:0;background:#1a1a1a;border-bottom:1px solid #333;padding:10px 14px;display:flex;align-items:center;gap:10px;z-index:10;flex-wrap:wrap;}}
+.back-link{{color:#7ec8e3;text-decoration:none;font-size:13px;font-weight:bold;flex-shrink:0;}}
+.back-link:hover{{text-decoration:underline;}}
+.top-download-btn{{margin-left:auto;padding:9px 16px;background:#ff4757;color:white;border:none;border-radius:8px;font-size:13px;font-weight:bold;cursor:pointer;flex-shrink:0;}}
+.top-download-btn:disabled{{background:#444;cursor:default;}}
+#status{{text-align:center;padding:40px 20px;font-size:14px;color:#aaa;}}
+#preview-wrap{{width:100%;overflow-x:auto;display:flex;justify-content:center;padding:16px 0;}}
+#preview-scale{{transform-origin:top center;}}
+.bottom-bar{{text-align:center;padding:20px;}}
+.bottom-download-btn{{padding:12px 26px;background:#ff4757;color:white;border:none;border-radius:10px;font-size:14px;font-weight:bold;cursor:pointer;}}
+.bottom-download-btn:disabled{{background:#444;cursor:default;}}
+</style>
+</head><body>
+<div class="top-bar">
+  <a class="back-link" href="{base_url}">&#8592; Back to your run</a>
+  <button class="top-download-btn" id="top-download-btn" disabled onclick="downloadImage()">&#11015; Download Image</button>
+</div>
+<div id="status">Building your journey image&hellip;</div>
+<div id="preview-wrap" style="display:none;"><div id="preview-scale"><div id="journey-image-source"></div></div></div>
+<div class="bottom-bar" id="bottom-bar" style="display:none;">
+  <button class="bottom-download-btn" id="bottom-download-btn" onclick="downloadImage()">&#11015; Download Image</button>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script>
+var API_BASE='{api_base}';
+var TRAINER={trainer_js};
+var finalCanvas=null;
+var finalFileName='trainer-lotto-locke.png';
+
+var BADGE_MAP={{
+  'Brock':{{'url':'https://archives.bulbagarden.net/media/upload/d/dd/Boulder_Badge.png',name:'Boulder Badge'}},
+  'Misty':{{'url':'https://archives.bulbagarden.net/media/upload/9/9c/Cascade_Badge.png',name:'Cascade Badge'}},
+  'Surge':{{'url':'https://archives.bulbagarden.net/media/upload/a/a6/Thunder_Badge.png',name:'Thunder Badge'}},
+  'Erika':{{'url':'https://archives.bulbagarden.net/media/upload/b/b5/Rainbow_Badge.png',name:'Rainbow Badge'}},
+  'Koga':{{'url':'https://archives.bulbagarden.net/media/upload/7/7d/Soul_Badge.png',name:'Soul Badge'}},
+  'Sabrina':{{'url':'https://archives.bulbagarden.net/media/upload/6/6b/Marsh_Badge.png',name:'Marsh Badge'}},
+  'Blaine':{{'url':'https://archives.bulbagarden.net/media/upload/1/12/Volcano_Badge.png',name:'Volcano Badge'}},
+  'Giovanni':{{'url':'https://archives.bulbagarden.net/media/upload/7/78/Earth_Badge.png',name:'Earth Badge'}},
+  'Indigo Plateau':{{emoji:'\\u{{1F3C6}}',name:'Kanto Champion'}},
+  'Post-game':{{emoji:'\\u2B50',name:'Complete!'}}
+}};
+
+function apiGet(action,params,callback,errCallback){{
+  var qs='?action='+encodeURIComponent(action);
+  if(params)Object.keys(params).forEach(function(k){{qs+='&'+encodeURIComponent(k)+'='+encodeURIComponent(params[k]);}});
+  fetch(API_BASE+qs).then(function(r){{return r.json();}}).then(function(data){{
+    if(data&&data.error&&errCallback){{errCallback({{message:data.error}});return;}}
+    callback(data);
+  }}).catch(function(e){{if(errCallback)errCallback(e);}});
+}}
+
+function setStatus(text,isError){{
+  var el=document.getElementById('status');
+  el.style.color=isError?'#ff4757':'#aaa';
+  el.innerHTML=text;
+}}
+
+function pkmnChip(name,borderColor,grayscale,base64Map,grayBase64Map,size,showName){{
+  size=size||52;showName=showName===undefined?true:showName;
+  function pkmnImg(nm,gray){{
+    if(gray&&grayBase64Map[nm])return grayBase64Map[nm];
+    if(base64Map[nm])return base64Map[nm];
+    var n=nm.toLowerCase().replace(/\\s+/g,'-').replace(/\\./g,'').replace(/'/g,'');
+    if(nm==='Nidoran\\u2640')n='nidoran-f';
+    if(nm==='Nidoran\\u2642')n='nidoran-m';
+    return'https://img.pokemondb.net/sprites/heartgold-soulsilver/normal/'+n+'.png';
+  }}
+  var filter=grayscale?'filter:grayscale(1) opacity(0.55);':'';
+  var skullSize=Math.max(8,Math.round(size*0.19));
+  var skull=grayscale?'<div style="position:absolute;top:1px;right:2px;font-size:'+skullSize+'px;line-height:1;">&#128128;</div>':'';
+  var nameHtml=showName?'<div style="font-size:9px;color:#ccc;margin-top:2px;max-width:'+(size+6)+'px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+name+'</div>':'';
+  return'<div style="text-align:center;margin:3px;position:relative;width:'+size+'px;">'
+    +skull
+    +'<img src="'+pkmnImg(name,grayscale)+'" style="width:'+size+'px;height:'+size+'px;display:block;margin:0 auto;border-radius:8px;border:2px solid '+borderColor+';background:#2a2a2a;'+filter+'">'
+    +nameHtml
+    +'</div>';
+}}
+
+function buildJourneyImageHtml(data,base64Map,urlBase64Map,grayBase64Map){{
+  base64Map=base64Map||{{}};urlBase64Map=urlBase64Map||{{}};grayBase64Map=grayBase64Map||{{}};
+  var displayName=data.displayName||'Trainer';
+  var version=data.version||'FireRed';
+  var sections=data.sections||[];
+  var spinMap=data.spinMap||{{}};
+  var catchesBySection=data.catchesBySection||{{}};
+  var bossTeams=data.bossTeams||{{}};
+  var bossAttemptsBySection=data.bossAttemptsBySection||{{}};
+  var graveyardNoSection=data.graveyardNoSection||[];
+  var punishmentsBySection=data.punishmentsBySection||{{}};
+
+  function pkmnImg(name,grayscale){{
+    if(grayscale&&grayBase64Map[name])return grayBase64Map[name];
+    if(base64Map[name])return base64Map[name];
+    var n=name.toLowerCase().replace(/\\s+/g,'-').replace(/\\./g,'').replace(/'/g,'');
+    if(name==='Nidoran\\u2640')n='nidoran-f';
+    if(name==='Nidoran\\u2642')n='nidoran-m';
+    return'https://img.pokemondb.net/sprites/heartgold-soulsilver/normal/'+n+'.png';
+  }}
+  function proxiedImg(url){{
+    if(!url)return'';
+    if(urlBase64Map[url])return urlBase64Map[url];
+    if(urlBase64Map[url]==='')return'';
+    return url;
+  }}
+  function chip(name,borderColor,grayscale,size,showName){{return pkmnChip(name,borderColor,grayscale,base64Map,grayBase64Map,size,showName);}}
+
+  var html='<div style="width:900px;background:#1a1a1a;padding:24px;box-sizing:border-box;">';
+  html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid #333;">';
+  html+='<div><div style="font-size:26px;font-weight:bold;color:#ff4757;">Pok\\u00e9mon Lotto-Locke</div>';
+  html+='<div style="font-size:15px;color:#aaa;margin-top:4px;">'+displayName+'\\'s journey through '+version+'</div></div>';
+  html+='<div style="font-size:11px;color:#555;">lotto-locke.com</div></div>';
+
+  sections.forEach(function(sec){{
+    var spins=spinMap[sec.shortName]||{{}};
+    var catches=catchesBySection[sec.shortName]||[];
+    var bossSlots=bossTeams[sec.shortName]||[];
+    var punishments=punishmentsBySection[sec.shortName]||[];
+    var hasSomething=spins.mandate||spins.exclude||catches.length>0||bossSlots.length>0;
+    if(!hasSomething)return;
+    var isDefeated=bossSlots.length>0;
+    var borderColor=isDefeated?'#2ed573':'#444';
+    html+='<div style="background:#1e1e1e;border:2px solid '+borderColor+';border-radius:12px;margin-bottom:10px;overflow:hidden;">';
+    html+='<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:#252525;">';
+    if(proxiedImg(sec.bossImage))html+='<img src="'+proxiedImg(sec.bossImage)+'" style="width:34px;height:34px;object-fit:contain;background:#2a2a2a;border-radius:50%;padding:2px;flex-shrink:0;">';
+    html+='<div style="flex:1;"><div style="font-size:13px;font-weight:bold;color:#fff;">'+sec.shortName+'</div>';
+    html+='<div style="font-size:10px;color:#777;">'+sec.fullName+'</div></div>';
+    var badgeInfo=BADGE_MAP[sec.shortName];
+    if(isDefeated&&badgeInfo){{
+      if(badgeInfo.emoji)html+='<span style="font-size:20px;line-height:1;flex-shrink:0;" title="'+badgeInfo.name+'">'+badgeInfo.emoji+'</span>';
+      else if(proxiedImg(badgeInfo.url))html+='<img src="'+proxiedImg(badgeInfo.url)+'" style="width:26px;height:26px;object-fit:contain;flex-shrink:0;filter:drop-shadow(0 0 3px rgba(255,215,0,0.5));" title="'+badgeInfo.name+'">';
+    }}
+    html+='<div style="background:#2a2a2a;padding:2px 8px;border-radius:10px;font-size:11px;color:#ffa500;font-weight:bold;flex-shrink:0;">Lv.'+sec.levelCap+'</div>';
+    if(isDefeated)html+='<div style="font-size:11px;color:#2ed573;font-weight:bold;margin-left:8px;flex-shrink:0;">&#10003; Defeated</div>';
+    html+='</div>';
+    html+='<div style="padding:10px 14px;display:flex;flex-wrap:wrap;gap:14px;">';
+
+    if(spins.exclude){{html+='<div><div style="font-size:9px;color:#ff4757;font-weight:bold;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">Excluded</div><div style="display:flex;">'+chip(spins.exclude,'#ff4757',false)+'</div></div>';}}
+    if(spins.mandate){{html+='<div><div style="font-size:9px;color:#2ed573;font-weight:bold;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">Mandated</div><div style="display:flex;">'+chip(spins.mandate,'#2ed573',false)+'</div></div>';}}
+
+    var allAttempts=bossAttemptsBySection[sec.shortName]||[];
+    var lossRosters=[];
+    for(var ai2=0;ai2<allAttempts.length;ai2++){{
+      if(allAttempts[ai2].result==='Whited Out'){{
+        var prevRegistered=null;
+        for(var bi=ai2-1;bi>=0;bi--){{if(allAttempts[bi].result==='Registered'||allAttempts[bi].result==='Defeated'){{prevRegistered=allAttempts[bi];break;}}}}
+        if(prevRegistered&&prevRegistered.slots&&prevRegistered.slots.length>0)lossRosters.push(prevRegistered.slots);
+      }}
+    }}
+    var allAttemptRosterNames=[];
+    allAttempts.forEach(function(a){{(a.slots||[]).forEach(function(n){{if(allAttemptRosterNames.indexOf(n)<0)allAttemptRosterNames.push(n);}});}});
+    lossRosters.forEach(function(slots){{slots.forEach(function(n){{if(allAttemptRosterNames.indexOf(n)<0)allAttemptRosterNames.push(n);}});}});
+    var faintedNames=catches.filter(function(c){{return c.fainted;}}).map(function(c){{return c.name;}});
+    var faintedInBossTeam=allAttemptRosterNames.filter(function(n){{return faintedNames.indexOf(n)>=0;}});
+
+    function matchesMandate(c){{
+      if(!spins.mandate)return false;
+      if(c.family&&c.family.indexOf(spins.mandate)>=0)return true;
+      return c.name===spins.mandate;
+    }}
+    var alive=catches.filter(function(c){{return!c.fainted&&!matchesMandate(c)&&faintedInBossTeam.indexOf(c.name)<0&&c.caughtInSection===sec.shortName;}});
+    if(alive.length>0){{
+      html+='<div><div style="font-size:9px;color:#aaa;font-weight:bold;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">Caught</div><div style="display:flex;flex-wrap:wrap;">';
+      alive.forEach(function(c){{html+=chip(c.name,'#555',false);}});
+      html+='</div></div>';
+    }}
+
+    if(punishments.length>0){{
+      var punTwoCol=punishments.length>3;
+      html+='<div style="display:flex;flex-direction:column;justify-content:center;align-items:center;"><div style="font-size:9px;color:#9b59b6;font-weight:bold;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Punishments</div>';
+      html+='<div style="display:flex;flex-direction:column;flex-wrap:wrap;gap:4px;'+(punTwoCol?'max-height:54px;':'')+'align-items:center;">';
+      punishments.forEach(function(p){{html+='<div style="background:#1a0030;border:1px solid #4b0082;border-radius:6px;padding:3px 7px;font-size:10px;color:#cc88ff;white-space:nowrap;">'+p+'</div>';}});
+      html+='</div></div>';
+    }}
+
+    if(bossSlots.length>0){{
+      html+='<div><div style="font-size:9px;color:#ffa500;font-weight:bold;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">Boss Team</div><div style="display:flex;flex-wrap:wrap;">';
+      bossSlots.forEach(function(n){{var isFainted=faintedNames.indexOf(n)>=0;html+=chip(n,'#ffa500',isFainted);}});
+      html+='</div></div>';
+    }}
+
+    lossRosters.forEach(function(slots,ai){{
+      var label=lossRosters.length>1?'Previous Attempt '+(ai+1):'Previous Attempt';
+      html+='<div><div style="font-size:9px;color:#666;font-weight:bold;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">'+label+'</div><div style="display:flex;flex-wrap:wrap;opacity:0.75;">';
+      slots.forEach(function(n){{var isFainted=faintedNames.indexOf(n)>=0;html+=chip(n,'#ff4757',isFainted,36,false);}});
+      html+='</div></div>';
+    }});
+
+    var faintedHereNotBoss=catches.filter(function(c){{return c.fainted&&faintedInBossTeam.indexOf(c.name)<0;}});
+    if(faintedHereNotBoss.length>0){{
+      html+='<div><div style="font-size:9px;color:#777;font-weight:bold;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">&#128128; Fainted</div><div style="display:flex;flex-wrap:wrap;">';
+      faintedHereNotBoss.forEach(function(c){{html+=chip(c.name,'#555',true);}});
+      html+='</div></div>';
+    }}
+
+    html+='</div></div>';
+  }});
+
+  if(graveyardNoSection.length>0){{
+    html+='<div style="background:#1e1e1e;border:2px solid #333;border-radius:12px;margin-bottom:10px;padding:10px 14px;"><div style="font-size:9px;color:#555;font-weight:bold;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Fainted (section unrecorded)</div><div style="display:flex;flex-wrap:wrap;">';
+    graveyardNoSection.forEach(function(c){{html+=chip(c.name,'#333',true);}});
+    html+='</div></div>';
+  }}
+  html+='<div style="text-align:center;margin-top:12px;font-size:10px;color:#333;">Generated at lotto-locke.com</div></div>';
+  return html;
+}}
+
+function buildGrayscaleVersionsThenRender(base64Map,faintedNeeded,callback,grayBase64Map){{
+  var names=Object.keys(faintedNeeded).filter(function(n){{return base64Map[n];}});
+  if(names.length===0){{callback();return;}}
+  var remaining=names.length;
+  names.forEach(function(name){{
+    var img=new Image();
+    img.onload=function(){{
+      try{{
+        var c=document.createElement('canvas');
+        c.width=img.naturalWidth||52;c.height=img.naturalHeight||52;
+        var cctx=c.getContext('2d');
+        cctx.drawImage(img,0,0,c.width,c.height);
+        var imgData=cctx.getImageData(0,0,c.width,c.height);
+        var px=imgData.data;
+        for(var i=0;i<px.length;i+=4){{
+          var gray=px[i]*0.3+px[i+1]*0.59+px[i+2]*0.11;
+          px[i]=gray;px[i+1]=gray;px[i+2]=gray;px[i+3]=px[i+3]*0.55;
+        }}
+        cctx.putImageData(imgData,0,0);
+        grayBase64Map[name]=c.toDataURL('image/png');
+      }}catch(e){{grayBase64Map[name]='';}}
+      remaining--;if(remaining===0)callback();
+    }};
+    img.onerror=function(){{grayBase64Map[name]='';remaining--;if(remaining===0)callback();}};
+    img.src=base64Map[name];
+  }});
+}}
+
+function fitPreviewToScreen(){{
+  var sourceDiv=document.getElementById('journey-image-source');
+  var scaleWrap=document.getElementById('preview-scale');
+  var naturalWidth=900;
+  var available=Math.min(window.innerWidth-20,900);
+  var scale=Math.min(1,available/naturalWidth);
+  scaleWrap.style.transform='scale('+scale+')';
+  scaleWrap.style.width=naturalWidth+'px';
+  scaleWrap.style.marginBottom=(sourceDiv.offsetHeight*(scale-1))+'px';
+}}
+
+function downloadImage(){{
+  if(!finalCanvas)return;
+  var a=document.createElement('a');
+  a.href=finalCanvas.toDataURL('image/png');
+  a.download=finalFileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}}
+
+function startGeneration(){{
+  apiGet('getJourneyImageData',{{trainerName:TRAINER}},function(data){{
+    finalFileName=(data.displayName||'trainer').replace(/[^a-zA-Z0-9]/g,'-')+'-lotto-locke.png';
+    var sourceDiv=document.getElementById('journey-image-source');
+    sourceDiv.innerHTML=buildJourneyImageHtml(data,{{}},{{}},{{}});
+    var allNames=[],allImageUrls=[],faintedNeeded={{}};
+    var sections=data.sections||[],spinMap=data.spinMap||{{}},catchesBySection=data.catchesBySection||{{}};
+    var bossTeams=data.bossTeams||{{}},graveyardNoSection=data.graveyardNoSection||[];
+    sections.forEach(function(sec){{
+      var spins=spinMap[sec.shortName]||{{}};
+      if(spins.mandate)allNames.push(spins.mandate);
+      if(spins.exclude)allNames.push(spins.exclude);
+      var catchesHere=catchesBySection[sec.shortName]||[];
+      var faintedNamesHere=catchesHere.filter(function(c){{return c.fainted;}}).map(function(c){{return c.name;}});
+      catchesHere.forEach(function(c){{allNames.push(c.name);if(c.fainted)faintedNeeded[c.name]=true;}});
+      (bossTeams[sec.shortName]||[]).forEach(function(n){{allNames.push(n);if(faintedNamesHere.indexOf(n)>=0)faintedNeeded[n]=true;}});
+      if(sec.bossImage)allImageUrls.push(sec.bossImage);
+      var badgeInfo=BADGE_MAP[sec.shortName];
+      if(badgeInfo&&badgeInfo.url)allImageUrls.push(badgeInfo.url);
+    }});
+    graveyardNoSection.forEach(function(c){{allNames.push(c.name);faintedNeeded[c.name]=true;}});
+    var uniqueNames=allNames.filter(function(v,i,a){{return a.indexOf(v)===i;}});
+    var uniqueUrls=allImageUrls.filter(function(v,i,a){{return a.indexOf(v)===i;}});
+    var base64Map={{}},urlBase64Map={{}},grayBase64Map={{}},loaded=0;
+    var total=uniqueNames.length+uniqueUrls.length;
+    function finish(){{
+      buildGrayscaleVersionsThenRender(base64Map,faintedNeeded,function(){{renderFinal(data,sourceDiv,base64Map,urlBase64Map,grayBase64Map);}},grayBase64Map);
+    }}
+    if(total===0){{finish();return;}}
+    setStatus('Loading images (0/'+total+')...');
+    function onOneLoaded(){{
+      loaded++;
+      setStatus('Loading images ('+loaded+'/'+total+')...');
+      if(loaded===total)finish();
+    }}
+    uniqueNames.forEach(function(name){{apiGet('getSpriteBase64',{{name:name}},function(res){{base64Map[name]=res.base64||'';onOneLoaded();}},function(){{base64Map[name]='';onOneLoaded();}});}});
+    uniqueUrls.forEach(function(url){{apiGet('getImageProxy',{{url:url}},function(res){{urlBase64Map[url]=res.base64||'';onOneLoaded();}},function(){{urlBase64Map[url]='';onOneLoaded();}});}});
+  }},function(){{setStatus('Failed to load journey data. Please go back and try again.',true);}});
+}}
+
+function renderFinal(data,sourceDiv,base64Map,urlBase64Map,grayBase64Map){{
+  setStatus('Rendering image, almost done&hellip;');
+  sourceDiv.innerHTML=buildJourneyImageHtml(data,base64Map,urlBase64Map,grayBase64Map);
+  setTimeout(function(){{
+    html2canvas(sourceDiv,{{backgroundColor:'#1a1a1a',scale:2,useCORS:false,allowTaint:true,logging:false}}).then(function(canvas){{
+      finalCanvas=canvas;
+      document.getElementById('status').style.display='none';
+      document.getElementById('preview-wrap').style.display='flex';
+      document.getElementById('bottom-bar').style.display='block';
+      document.getElementById('top-download-btn').disabled=false;
+      fitPreviewToScreen();
+    }}).catch(function(e){{
+      console.error('html2canvas error:',e);
+      setStatus('Image generation failed: '+(e&&e.message?e.message:'unknown error'),true);
+    }});
+  }},500);
+}}
+
+window.addEventListener('resize',function(){{if(finalCanvas)fitPreviewToScreen();}});
+startGeneration();
+</script>
+</body></html>'''
+        return html, "text/html"
+    except Exception as e:
+        return f"<html><body style='background:#1a1a1a;color:white;padding:30px;text-align:center;'><h2>Error</h2><p>{str(e)}</p></body></html>", "text/html"
+
 def serve_picks_html(params):
     try:
         trainer = params.get("trainer", [""])[0].strip().lower()
@@ -1774,6 +2109,10 @@ class handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/picks":
             html, _ = serve_picks_html(params)
+            self.send_html(html)
+            return
+        if parsed.path == "/journey-image":
+            html, _ = serve_journey_image_html(params)
             self.send_html(html)
             return
 
