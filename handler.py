@@ -1215,7 +1215,7 @@ html,body{{margin:0;padding:0;background:#111;color:#aaa;font-family:'Segoe UI',
 </style>
 </head><body>
 <div class="top-bar">
-  <a class="back-link" href="{base_url}">&#8592; Back to your run</a>
+  <a class="back-link" href="{base_url}?trainer={trainer}">&#8592; Back to your run</a>
   <button class="top-download-btn" id="top-download-btn" disabled onclick="downloadImage()">&#11015; Download Image</button>
 </div>
 <div id="status">Building your journey image&hellip;</div>
