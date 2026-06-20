@@ -1449,20 +1449,25 @@ function fitPreviewToScreen(){{
 
 function downloadImage(){{
   if(!finalCanvas)return;
-  var dataUrl;
   try{{
-    dataUrl=finalCanvas.toDataURL('image/png');
+    finalCanvas.toBlob(function(blob){{
+      if(!blob){{
+        setStatus('Could not export the image. Please refresh and try again.',true);
+        return;
+      }}
+      var blobUrl=URL.createObjectURL(blob);
+      var a=document.createElement('a');
+      a.href=blobUrl;
+      a.download=finalFileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function(){{URL.revokeObjectURL(blobUrl);}},10000);
+    }},'image/png');
   }}catch(e){{
     console.error('Canvas export failed:',e);
     setStatus('Could not export the image (a sprite failed to load securely). Please refresh and try again.',true);
-    return;
   }}
-  var a=document.createElement('a');
-  a.href=dataUrl;
-  a.download=finalFileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
 }}
 
 function startGeneration(){{
