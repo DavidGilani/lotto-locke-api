@@ -1054,7 +1054,32 @@ def get_journey_image_data(params):
             elif r["spin_type"] == "Exclude":
                 spin_map[sec]["exclude"] = r["pokemon"]
 
-        catches_data = db().table("trainer_catches").select("*").eq("trainer", trainer).execute()
+        # Evolution family map, so a mandate that later evolved (e.g. Machop -> Machoke)
+        # still correctly dedupes against its caught entry instead of appearing twice
+        evo_result = db().table("evolutions").select("*").execute()
+        evo_map = {}
+        for r in evo_result.data:
+            base = r["base"]
+            evolved = r["evolved"]
+            evo_map.setdefault(base, [])
+            evo_map.setdefault(evolved, [])
+            if evolved not in evo_map[base]:
+                evo_map[base].append(evolved)
+            if base not in evo_map[evolved]:
+                evo_map[evolved].append(base)
+
+        def get_family(pkmn_name):
+            family = {pkmn_name: True}
+            to_check = [pkmn_name]
+            while to_check:
+                cur = to_check.pop()
+                for rel in evo_map.get(cur, []):
+                    if rel not in family:
+                        family[rel] = True
+                        to_check.append(rel)
+            return family
+
+        catches_data = db().table("trainer_catches").select("*").eq("trainer", trainer).order("id").execute()
         enc_result = db().table("master_encounters").select("section,route,pokemon").in_("version", ["Both", version]).execute()
         route_to_section = {}
         for r in enc_result.data:
@@ -1069,13 +1094,16 @@ def get_journey_image_data(params):
             catch_sec = route_to_section.get(route_id, "")
             fainted = r.get("status","") == "fainted"
             fainted_in_section = r.get("fainted_in_section","")
+            original_name = r.get("original_pokemon","")
             entry = {
                 "name": r["pokemon"],
                 "route": route_id,
                 "fainted": fainted,
                 "faintedInSection": fainted_in_section,
                 "traded": r.get("trade_status","") == "traded",
-                "originalName": r.get("original_pokemon","")
+                "originalName": original_name,
+                "caughtInSection": catch_sec,
+                "family": list(get_family(r["pokemon"]).keys()) + (list(get_family(original_name).keys()) if original_name else [])
             }
             # Fainted pokemon appear under the section they fainted in,
             # alive pokemon appear under the section they were caught in
@@ -1089,13 +1117,18 @@ def get_journey_image_data(params):
             else:
                 graveyard_no_section.append(entry)
 
-        bbl_data = db().table("boss_battle_log").select("*").eq("trainer", trainer).execute()
+        # Every boss attempt (Defeated and Whited Out), ordered oldest-first, not just the first win -
+        # the data already exists per-attempt in boss_battle_log, it was just being discarded before
+        bbl_data = db().table("boss_battle_log").select("*").eq("trainer", trainer).order("timestamp").execute()
+        boss_attempts = {}
         boss_teams = {}
         for r in bbl_data.data:
             sec = r["section"]
             result = r.get("result","")
+            slots = [r[f"slot{i}"] for i in range(1,7) if r.get(f"slot{i}")]
+            boss_attempts.setdefault(sec, [])
+            boss_attempts[sec].append({"slots": slots, "result": result})
             if result == "Defeated" and sec not in boss_teams:
-                slots = [r[f"slot{i}"] for i in range(1,7) if r.get(f"slot{i}")]
                 boss_teams[sec] = slots
 
         # Build punishments active during each section
@@ -1127,6 +1160,7 @@ def get_journey_image_data(params):
             "spinMap": spin_map,
             "catchesBySection": catches_by_section,
             "bossTeams": boss_teams,
+            "bossAttemptsBySection": boss_attempts,
             "graveyardNoSection": graveyard_no_section,
             "punishmentsBySection": punishments_by_section
         })
