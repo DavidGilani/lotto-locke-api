@@ -1194,7 +1194,7 @@ def serve_journey_image_html(params):
             return "<html><body style='background:#1a1a1a;color:white;padding:30px;text-align:center;'><h2>No trainer specified</h2></body></html>", "text/html"
 
         trainer_js = json.dumps(trainer)
-        base_url = "https://lotto-locke-app.vercel.app"
+        base_url = "https://lotto-locke.com"
         api_base = "https://lotto-locke-api.onrender.com"
 
         html = f'''<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
