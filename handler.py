@@ -1514,7 +1514,7 @@ function renderFinal(data,sourceDiv,base64Map,urlBase64Map,grayBase64Map){{
   setStatus('Rendering image, almost done&hellip;');
   sourceDiv.innerHTML=buildJourneyImageHtml(data,base64Map,urlBase64Map,grayBase64Map);
   setTimeout(function(){{
-    html2canvas(sourceDiv,{{backgroundColor:'#1a1a1a',scale:2,useCORS:false,allowTaint:true,logging:false}}).then(function(canvas){{
+    html2canvas(sourceDiv,{{backgroundColor:'#1a1a1a',scale:2,useCORS:false,allowTaint:false,logging:true}}).then(function(canvas){{
       finalCanvas=canvas;
       document.getElementById('status').style.display='none';
       document.getElementById('preview-wrap').style.display='flex';
