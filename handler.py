@@ -1263,18 +1263,19 @@ function pkmnChip(name,borderColor,grayscale,base64Map,grayBase64Map,size,showNa
   function pkmnImg(nm,gray){{
     if(gray&&grayBase64Map[nm])return grayBase64Map[nm];
     if(base64Map[nm])return base64Map[nm];
-    var n=nm.toLowerCase().replace(/\\s+/g,'-').replace(/\\./g,'').replace(/'/g,'');
-    if(nm==='Nidoran\\u2640')n='nidoran-f';
-    if(nm==='Nidoran\\u2642')n='nidoran-m';
-    return'https://img.pokemondb.net/sprites/heartgold-soulsilver/normal/'+n+'.png';
+    // No proxied base64 available for this sprite - return empty rather than a raw
+    // cross-origin URL, since even one tainting image breaks canvas export for everyone.
+    return'';
   }}
   var filter=grayscale?'filter:grayscale(1) opacity(0.55);':'';
   var skullSize=Math.max(8,Math.round(size*0.19));
   var skull=grayscale?'<div style="position:absolute;top:1px;right:2px;font-size:'+skullSize+'px;line-height:1;">&#128128;</div>':'';
   var nameHtml=showName?'<div style="font-size:9px;color:#ccc;margin-top:2px;max-width:'+(size+6)+'px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+name+'</div>':'';
+  var imgSrc=pkmnImg(name,grayscale);
+  var imgTag=imgSrc?'<img src="'+imgSrc+'" style="width:'+size+'px;height:'+size+'px;display:block;margin:0 auto;border-radius:8px;border:2px solid '+borderColor+';background:#2a2a2a;'+filter+'">':'<div style="width:'+size+'px;height:'+size+'px;display:block;margin:0 auto;border-radius:8px;border:2px solid '+borderColor+';background:#2a2a2a;"></div>';
   return'<div style="text-align:center;margin:3px;position:relative;width:'+size+'px;">'
     +skull
-    +'<img src="'+pkmnImg(name,grayscale)+'" style="width:'+size+'px;height:'+size+'px;display:block;margin:0 auto;border-radius:8px;border:2px solid '+borderColor+';background:#2a2a2a;'+filter+'">'
+    +imgTag
     +nameHtml
     +'</div>';
 }}
@@ -1448,8 +1449,16 @@ function fitPreviewToScreen(){{
 
 function downloadImage(){{
   if(!finalCanvas)return;
+  var dataUrl;
+  try{{
+    dataUrl=finalCanvas.toDataURL('image/png');
+  }}catch(e){{
+    console.error('Canvas export failed:',e);
+    setStatus('Could not export the image (a sprite failed to load securely). Please refresh and try again.',true);
+    return;
+  }}
   var a=document.createElement('a');
-  a.href=finalCanvas.toDataURL('image/png');
+  a.href=dataUrl;
   a.download=finalFileName;
   document.body.appendChild(a);
   a.click();
