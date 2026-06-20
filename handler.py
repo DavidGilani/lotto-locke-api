@@ -1569,7 +1569,7 @@ def serve_picks_html(params):
             display_name = trainer_result.data[0].get("display_name") or trainer
             trainer_version = trainer_result.data[0].get("version") or "FireRed"
 
-        base_url = "https://lotto-locke-app.vercel.app"
+        base_url = "https://lotto-locke.com"
         api_base = "https://lotto-locke-api.onrender.com"
 
         mandate = mandate_row["pokemon"] if mandate_row else None
@@ -1776,7 +1776,7 @@ def serve_friend_view_html(params):
         if "error" in data:
             return f"<html><body style='background:#1a1a1a;color:white;padding:30px;text-align:center;'><h2>Error</h2><p>{data['error']}</p></body></html>", "text/html"
 
-        base_url = "https://lotto-locke-app.vercel.app"
+        base_url = "https://lotto-locke.com"
 
         html = build_friend_view_html(data, base_url)
         return html, "text/html"
