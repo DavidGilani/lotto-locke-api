@@ -114,8 +114,9 @@ def load_trainer(body):
             for r in journey_data.data
         ]
 
-        # Catches
-        catches_data = db().table("trainer_catches").select("*").eq("trainer", name).execute()
+	# Catches (ordered by id so "My Team" always reflects catch order,
+        # regardless of which row was most recently updated by an evolve/trade/faint)
+        catches_data = db().table("trainer_catches").select("*").eq("trainer", name).order("id").execute()
         trainer_catches = [
             {
                 "route": r["route_id"],
@@ -777,7 +778,7 @@ def get_friend_view_data(params):
         game_mode = row.get("game_mode") or "solo"
 
         journey_data = db().table("journey_results").select("*").eq("trainer", friend_name).execute()
-        catches_data = db().table("trainer_catches").select("*").eq("trainer", friend_name).execute()
+        catches_data = db().table("trainer_catches").select("*").eq("trainer", friend_name).order("id").execute()
         pun_data = db().table("punishment_results").select("*").eq("trainer", friend_name).execute()
 
         sections_result = db().table("sections").select("*").order("id").execute()
