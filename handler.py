@@ -2137,6 +2137,12 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def do_HEAD(self):
+        self.send_response(200)
+        for k, v in CORS_HEADERS.items():
+            self.send_header(k, v)
+        self.end_headers()
+
     def do_OPTIONS(self):
         self.send_response(200)
         for k, v in CORS_HEADERS.items():
