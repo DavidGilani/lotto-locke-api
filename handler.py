@@ -402,9 +402,28 @@ def get_2player_picks(params):
 def get_punishment_data(params):
     try:
         trainer_name = params.get("trainerName", [""])[0].lower()
+        current_section = params.get("currentSection", [""])[0]
 
-        active_result = db().table("punishment_results").select("punishment").eq("trainer", trainer_name).execute()
-        active_names = [r["punishment"] for r in active_result.data]
+        # Fetch all sections in order so we can compare section positions
+        sections_result = db().table("sections").select("short_name").order("id").execute()
+        section_order = [r["short_name"] for r in sections_result.data]
+
+        def section_index(name):
+            try:
+                return section_order.index(name)
+            except ValueError:
+                return len(section_order) - 1
+
+        current_idx = section_index(current_section) if current_section else 0
+
+        # Only exclude punishments that are still active (expires_after_section is at or after current section)
+        active_result = db().table("punishment_results").select("punishment,expires_after_section").eq("trainer", trainer_name).execute()
+        active_names = set()
+        for r in active_result.data:
+            expires = r.get("expires_after_section", "")
+            expires_idx = section_index(expires) if expires else len(section_order) - 1
+            if expires_idx >= current_idx:
+                active_names.add(r["punishment"])
 
         pun_result = db().table("punishments").select("*").execute()
         formatted = []
