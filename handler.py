@@ -236,8 +236,7 @@ def save_game_mode(body):
 # ============================================================
 
 def version_filter(version):
-    """Return DB version tags to include for a given game version.
-    FRLG shared data is tagged 'Both'; HGSS shared data is tagged 'BothHGSS'."""
+    """Return DB version tags for a given game. FRLG shared='Both'; HGSS shared='BothHGSS'."""
     if version in ("HeartGold", "SoulSilver"):
         return ["BothHGSS", version]
     return ["Both", version]
@@ -480,22 +479,25 @@ def get_boss_data(params):
             }
 
         is_hgss = version in ("HeartGold", "SoulSilver")
-        is_multi = section_name in ["Indigo Plateau", "Post-game", "E4Rematch"]
+        is_multi = section_name in ["Indigo Plateau", "Post-game", "Lance", "E4Rematch"]
         if is_multi:
-            if section_name == "Indigo Plateau":
+            if section_name in ("Indigo Plateau", "Lance"):
                 elite_names = (["Will", "Koga", "Bruno", "Karen"] if is_hgss
                                else ["Lorelei", "Bruno", "Agatha", "Lance"])
+                champ_key = "Lance" if is_hgss else "Indigo Plateau"
             elif section_name == "E4Rematch":
                 elite_names = ["Will Rematch", "Koga Rematch", "Bruno Rematch", "Karen Rematch"]
-            else:
+                champ_key = "E4Rematch"
+            else:  # Post-game FRLG
                 elite_names = ["Lorelei Rematch", "Bruno Rematch", "Agatha Rematch", "Lance Rematch"]
+                champ_key = "Post-game"
             entries = []
             for ename in elite_names:
                 result = db().table("bosses").select("*").eq("boss", ename).in_("version", version_filter(version)).execute()
                 if result.data:
                     match = next((r for r in result.data if r.get("version") == version), result.data[0])
                     entries.append(build_boss_entry(match))
-            champ_result = db().table("bosses").select("*").eq("boss", section_name).in_("version", version_filter(version)).execute()
+            champ_result = db().table("bosses").select("*").eq("boss", champ_key).in_("version", version_filter(version)).execute()
             for r in champ_result.data:
                 entries.append(build_boss_entry(r))
             return ok({"multiRow": True, "entries": entries})
