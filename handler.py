@@ -54,7 +54,7 @@ def create_trainer(body):
 
         name = trainer_name.lower()
         display_name = trainer_name
-        valid_versions = ["FireRed", "LeafGreen", "HeartGold", "SoulSilver"]
+        valid_versions = ["FireRed", "LeafGreen"]
         game_version = version if version in valid_versions else "FireRed"
         mode = "2player" if game_mode == "2player" else "solo"
 
@@ -235,17 +235,9 @@ def save_game_mode(body):
 # SECTION / ENCOUNTER / EVOLUTION DATA
 # ============================================================
 
-def version_filter(version):
-    """Return the version tags to include for a given selected game version.
-    HGSS shared data is tagged 'BothHGSS' so it never mixes with FRLG's 'Both'."""
-    if version in ("HeartGold", "SoulSilver"):
-        return ["BothHGSS", version]
-    return ["Both", version]
-
 def get_section_data(params):
     try:
-        version = params.get("version", ["FireRed"])[0]
-        result = db().table("sections").select("*").in_("version", version_filter(version)).order("id").execute()
+        result = db().table("sections").select("*").order("id").execute()
         return ok([{
             "shortName": r["short_name"],
             "fullName": r.get("full_name", ""),
@@ -258,7 +250,7 @@ def get_section_data(params):
 def get_encounter_data(params):
     try:
         version = params.get("version", ["FireRed"])[0]
-        result = db().table("master_encounters").select("*").in_("version", version_filter(version)).order("id").execute()
+        result = db().table("master_encounters").select("*").in_("version", ["Both", version]).order("id").execute()
         section_order = []
         section_map = {}
         for r in result.data:
@@ -319,7 +311,7 @@ def get_full_evolution_map(params):
 def get_trade_data(params):
     try:
         version = params.get("version", ["FireRed"])[0]
-        result = db().table("trades").select("*").in_("version", version_filter(version)).execute()
+        result = db().table("trades").select("*").in_("version", ["Both", version]).execute()
         return ok([{"give": r["give"], "receive": r["receive"], "version": r["version"]} for r in result.data])
     except Exception as e:
         return err(str(e))
@@ -335,7 +327,7 @@ def get_journey_wheel_data(params):
         version = params.get("version", ["FireRed"])[0]
         trainer_name = params.get("trainerName", [""])[0].lower()
 
-        wheel_result = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", version_filter(version)).execute()
+        wheel_result = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", ["Both", version]).execute()
         section_pokemon = [r["pokemon"] for r in wheel_result.data]
 
         spun_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("section", section_name).in_("spin_type", ["Mandate", "Exclude"]).execute()
@@ -346,7 +338,7 @@ def get_journey_wheel_data(params):
         random.shuffle(list_to_use)
 
         dex_result = db().table("pokedex").select("name,type1").execute()
-        dex_map = {r["name"]: r.get("type1", "normal") for r in dex_result.data}
+        dex_map = {r["name"]: r.get("type1", "normal").lower() for r in dex_result.data}
 
         wheel_items = [{"name": p, "image": "", "type": dex_map.get(p, "normal"), "weight": 1} for p in list_to_use]
         return ok({"wheelData": wheel_items, "currentGame": version, "targetRow": 0, "sectionName": section_name, "spinType": spin_type})
@@ -358,7 +350,7 @@ def get_elite4_wheel_data(params):
         version = params.get("version", ["FireRed"])[0]
         trainer_name = params.get("trainerName", [""])[0].lower()
 
-        wheel_result = db().table("wheels").select("pokemon").eq("section", "Indigo Plateau").in_("version", version_filter(version)).execute()
+        wheel_result = db().table("wheels").select("pokemon").eq("section", "Indigo Plateau").in_("version", ["Both", version]).execute()
         section_pokemon = [r["pokemon"] for r in wheel_result.data]
 
         excluded_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("spin_type", "Exclude").execute()
@@ -372,7 +364,7 @@ def get_elite4_wheel_data(params):
             return ok({"noNewPokemon": True})
 
         dex_result = db().table("pokedex").select("name,type1").execute()
-        dex_map = {r["name"]: r.get("type1", "normal") for r in dex_result.data}
+        dex_map = {r["name"]: r.get("type1", "normal").lower() for r in dex_result.data}
 
         random.shuffle(available)
         wheel_items = [{"name": p, "image": "", "type": dex_map.get(p, "normal"), "weight": 1} for p in available]
@@ -386,7 +378,7 @@ def get_2player_picks(params):
         version = params.get("version", ["FireRed"])[0]
         trainer_name = params.get("trainerName", [""])[0].lower()
 
-        wheel_result = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", version_filter(version)).execute()
+        wheel_result = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", ["Both", version]).execute()
         section_pokemon = [r["pokemon"] for r in wheel_result.data]
 
         if section_name == "Indigo Plateau":
@@ -399,7 +391,7 @@ def get_2player_picks(params):
                 return ok({"noNewPokemon": True})
 
         dex_result = db().table("pokedex").select("name,type1").execute()
-        dex_map = {r["name"]: r.get("type1", "normal") for r in dex_result.data}
+        dex_map = {r["name"]: r.get("type1", "normal").lower() for r in dex_result.data}
 
         random.shuffle(section_pokemon)
         picks = section_pokemon[:min(3, len(section_pokemon))]
@@ -411,10 +403,9 @@ def get_punishment_data(params):
     try:
         trainer_name = params.get("trainerName", [""])[0].lower()
         current_section = params.get("currentSection", [""])[0]
-        version = params.get("version", ["FireRed"])[0]
 
-        # Fetch this version's sections in order so we can compare section positions
-        sections_result = db().table("sections").select("short_name").in_("version", version_filter(version)).order("id").execute()
+        # Fetch all sections in order so we can compare section positions
+        sections_result = db().table("sections").select("short_name").order("id").execute()
         section_order = [r["short_name"] for r in sections_result.data]
 
         def section_index(name):
@@ -479,28 +470,24 @@ def get_boss_data(params):
                 "version": r.get("version", "Both")
             }
 
-        is_hgss = version in ("HeartGold", "SoulSilver")
-        is_multi = section_name in ["Indigo Plateau", "Post-game", "E4 Rematch"]
+        is_multi = section_name in ["Indigo Plateau", "Post-game"]
         if is_multi:
-            if section_name == "Indigo Plateau":
-                elite_names = (["Will", "Koga", "Bruno", "Karen"] if is_hgss
-                               else ["Lorelei", "Bruno", "Agatha", "Lance"])
-            elif section_name == "E4 Rematch":
-                elite_names = ["Will Rematch", "Koga Rematch", "Bruno Rematch", "Karen Rematch"]
-            else:  # Post-game (FRLG rematch)
-                elite_names = ["Lorelei Rematch", "Bruno Rematch", "Agatha Rematch", "Lance Rematch"]
+            elite_names = (
+                ["Lorelei", "Bruno", "Agatha", "Lance"]
+                if section_name == "Indigo Plateau"
+                else ["Lorelei Rematch", "Bruno Rematch", "Agatha Rematch", "Lance Rematch"]
+            )
             entries = []
             for ename in elite_names:
-                result = db().table("bosses").select("*").eq("boss", ename).in_("version", version_filter(version)).execute()
+                result = db().table("bosses").select("*").eq("boss", ename).execute()
                 if result.data:
-                    match = next((r for r in result.data if r.get("version") == version), result.data[0])
-                    entries.append(build_boss_entry(match))
-            champ_result = db().table("bosses").select("*").eq("boss", section_name).in_("version", version_filter(version)).execute()
+                    entries.append(build_boss_entry(result.data[0]))
+            champ_result = db().table("bosses").select("*").eq("boss", section_name).execute()
             for r in champ_result.data:
                 entries.append(build_boss_entry(r))
             return ok({"multiRow": True, "entries": entries})
 
-        result = db().table("bosses").select("*").eq("boss", section_name).in_("version", version_filter(version)).execute()
+        result = db().table("bosses").select("*").eq("boss", section_name).in_("version", [version, "Both"]).execute()
         if not result.data:
             return ok(None)
         # Prefer exact version match
@@ -813,7 +800,7 @@ def get_friend_view_data(params):
         catches_data = db().table("trainer_catches").select("*").eq("trainer", friend_name).order("id").execute()
         pun_data = db().table("punishment_results").select("*").eq("trainer", friend_name).execute()
 
-        sections_result = db().table("sections").select("*").in_("version", version_filter(version)).order("id").execute()
+        sections_result = db().table("sections").select("*").order("id").execute()
         sections_data = [{
             "shortName": r["short_name"],
             "fullName": r.get("full_name", ""),
@@ -833,7 +820,7 @@ def get_friend_view_data(params):
             if base not in evo_map[evolved]:
                 evo_map[evolved].append(base)
 
-        enc_result = db().table("master_encounters").select("*").in_("version", version_filter(version)).order("id").execute()
+        enc_result = db().table("master_encounters").select("*").in_("version", ["Both", version]).order("id").execute()
         encounter_data = {}
         encounter_route_map = {}
         for r in enc_result.data:
@@ -1073,7 +1060,7 @@ def get_journey_image_data(params):
         display_name = row.get("display_name") or trainer
         version = row.get("version") or "FireRed"
 
-        sections_result = db().table("sections").select("*").in_("version", version_filter(version)).order("id").execute()
+        sections_result = db().table("sections").select("*").order("id").execute()
         sections = [{"shortName": r["short_name"], "fullName": r.get("full_name",""), "levelCap": r.get("level_cap",""), "bossImage": r.get("boss_image","")} for r in sections_result.data]
 
         journey_data = db().table("journey_results").select("*").eq("trainer", trainer).execute()
@@ -1112,7 +1099,7 @@ def get_journey_image_data(params):
             return family
 
         catches_data = db().table("trainer_catches").select("*").eq("trainer", trainer).order("id").execute()
-        enc_result = db().table("master_encounters").select("section,route,pokemon").in_("version", version_filter(version)).execute()
+        enc_result = db().table("master_encounters").select("section,route,pokemon").in_("version", ["Both", version]).execute()
         route_to_section = {}
         for r in enc_result.data:
             route_id = "route-" + r["route"].replace(" ", "-").replace("'", "")
