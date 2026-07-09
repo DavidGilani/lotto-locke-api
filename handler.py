@@ -54,7 +54,7 @@ def create_trainer(body):
 
         name = trainer_name.lower()
         display_name = trainer_name
-        valid_versions = ["FireRed", "LeafGreen", "HeartGold", "SoulSilver"]
+        valid_versions = ["FireRed", "LeafGreen"]
         game_version = version if version in valid_versions else "FireRed"
         mode = "2player" if game_mode == "2player" else "solo"
 
@@ -235,16 +235,9 @@ def save_game_mode(body):
 # SECTION / ENCOUNTER / EVOLUTION DATA
 # ============================================================
 
-def version_filter(version):
-    """Return DB version tags for a given game. FRLG shared='Both'; HGSS shared='BothHGSS'."""
-    if version in ("HeartGold", "SoulSilver"):
-        return ["BothHGSS", version]
-    return ["Both", version]
-
 def get_section_data(params):
     try:
-        version = params.get("version", ["FireRed"])[0]
-        result = db().table("sections").select("*").in_("version", version_filter(version)).order("id").execute()
+        result = db().table("sections").select("*").order("id").execute()
         return ok([{
             "shortName": r["short_name"],
             "fullName": r.get("full_name", ""),
@@ -254,10 +247,86 @@ def get_section_data(params):
     except Exception as e:
         return err(str(e))
 
+def get_bonus_wheel_data(params):
+    """Catch-up wheel for sections with no new Pokemon.
+    Returns BonusMandate pool (encounters on this section's routes that first
+    appeared in earlier sections, minus caught/excluded) and CullPool (alive
+    non-mandatory team members, when team size >= 10)."""
+    try:
+        trainer_name = params.get("trainerName", [""])[0].lower()
+        section_name = params.get("sectionName", [""])[0]
+        version      = params.get("version", ["FireRed"])[0]
+
+        # -- All sections in order for this version
+        sections_result = db().table("sections").select("short_name").in_("version", version_filter(version)).order("id").execute()
+        section_order = [r["short_name"] for r in sections_result.data]
+        try:
+            current_idx = section_order.index(section_name)
+        except ValueError:
+            return ok({"bonusPool": [], "cullPool": [], "noBonus": True})
+
+        # -- What the player has already caught / excluded
+        catches_data = db().table("trainer_catches").select("pokemon,status").eq("trainer", trainer_name).execute()
+        caught_names = set(r["pokemon"] for r in catches_data.data)
+        excluded_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).in_("spin_type", ["Exclude", "BonusCull"]).execute()
+        excluded = set(r["pokemon"] for r in excluded_result.data)
+
+        # -- All-mandate names (to identify mandatory pokemon for cull exclusion)
+        mandate_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("spin_type", "Mandate").execute()
+        mandate_names = set(r["pokemon"] for r in mandate_result.data)
+        # Also include BonusMandate
+        bonus_mandate_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("spin_type", "BonusMandate").execute()
+        mandate_names.update(r["pokemon"] for r in bonus_mandate_result.data)
+
+        # -- Pokemon that appear on this section's routes in master_encounters
+        enc_result = db().table("master_encounters").select("pokemon").eq("section", section_name).in_("version", version_filter(version)).execute()
+        route_pokemon = set(r["pokemon"] for r in enc_result.data)
+
+        # -- Wheels for sections BEFORE this one (pokemon already introduced)
+        earlier_wheels = db().table("wheels").select("pokemon,section").in_("version", version_filter(version)).execute()
+        earlier_pokemon = set()
+        for r in earlier_wheels.data:
+            try:
+                wi = section_order.index(r["section"])
+                if wi < current_idx:
+                    earlier_pokemon.add(r["pokemon"])
+            except ValueError:
+                pass
+
+        # Bonus pool: on this section's routes, first appeared earlier, not caught, not excluded
+        bonus_pool = sorted(p for p in (route_pokemon & earlier_pokemon) if p not in caught_names and p not in excluded)
+
+        # Pokedex type colours
+        dex_result = db().table("pokedex").select("name,type1").execute()
+        dex_map = {r["name"]: r.get("type1", "normal").lower() for r in dex_result.data}
+
+        bonus_items = [{"name": p, "image": "", "type": dex_map.get(p, "normal"), "weight": 1} for p in bonus_pool]
+
+        # -- Cull pool: alive non-mandatory, non-excluded team members (>= 10 threshold)
+        all_catches = db().table("trainer_catches").select("*").eq("trainer", trainer_name).order("id").execute()
+        alive_team = [r for r in all_catches.data if r.get("status","") != "fainted"]
+        # Exclude already-culled
+        culled_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("spin_type", "BonusCull").execute()
+        culled_names = set(r["pokemon"] for r in culled_result.data)
+        non_mandatory_alive = [r["pokemon"] for r in alive_team if r["pokemon"] not in mandate_names and r["pokemon"] not in culled_names]
+        cull_eligible = len(non_mandatory_alive) >= 10
+        cull_items = [{"name": p, "image": "", "type": dex_map.get(p, "normal"), "weight": 1} for p in non_mandatory_alive] if cull_eligible else []
+
+        return ok({
+            "bonusPool": bonus_items,
+            "cullPool": cull_items,
+            "noBonus": len(bonus_items) == 0,
+            "cullEligible": cull_eligible,
+            "sectionName": section_name,
+        })
+    except Exception as e:
+        return err(str(e))
+
+
 def get_encounter_data(params):
     try:
         version = params.get("version", ["FireRed"])[0]
-        result = db().table("master_encounters").select("*").in_("version", version_filter(version)).order("id").execute()
+        result = db().table("master_encounters").select("*").in_("version", ["Both", version]).order("id").execute()
         section_order = []
         section_map = {}
         for r in result.data:
@@ -318,7 +387,7 @@ def get_full_evolution_map(params):
 def get_trade_data(params):
     try:
         version = params.get("version", ["FireRed"])[0]
-        result = db().table("trades").select("*").in_("version", version_filter(version)).execute()
+        result = db().table("trades").select("*").in_("version", ["Both", version]).execute()
         return ok([{"give": r["give"], "receive": r["receive"], "version": r["version"]} for r in result.data])
     except Exception as e:
         return err(str(e))
@@ -334,7 +403,7 @@ def get_journey_wheel_data(params):
         version = params.get("version", ["FireRed"])[0]
         trainer_name = params.get("trainerName", [""])[0].lower()
 
-        wheel_result = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", version_filter(version)).execute()
+        wheel_result = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", ["Both", version]).execute()
         section_pokemon = [r["pokemon"] for r in wheel_result.data]
 
         spun_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("section", section_name).in_("spin_type", ["Mandate", "Exclude"]).execute()
@@ -345,7 +414,7 @@ def get_journey_wheel_data(params):
         random.shuffle(list_to_use)
 
         dex_result = db().table("pokedex").select("name,type1").execute()
-        dex_map = {r["name"]: r.get("type1", "normal").lower() for r in dex_result.data}
+        dex_map = {r["name"]: r.get("type1", "normal") for r in dex_result.data}
 
         wheel_items = [{"name": p, "image": "", "type": dex_map.get(p, "normal"), "weight": 1} for p in list_to_use]
         return ok({"wheelData": wheel_items, "currentGame": version, "targetRow": 0, "sectionName": section_name, "spinType": spin_type})
@@ -357,7 +426,7 @@ def get_elite4_wheel_data(params):
         version = params.get("version", ["FireRed"])[0]
         trainer_name = params.get("trainerName", [""])[0].lower()
 
-        wheel_result = db().table("wheels").select("pokemon").eq("section", "Indigo Plateau").in_("version", version_filter(version)).execute()
+        wheel_result = db().table("wheels").select("pokemon").eq("section", "Indigo Plateau").in_("version", ["Both", version]).execute()
         section_pokemon = [r["pokemon"] for r in wheel_result.data]
 
         excluded_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("spin_type", "Exclude").execute()
@@ -371,7 +440,7 @@ def get_elite4_wheel_data(params):
             return ok({"noNewPokemon": True})
 
         dex_result = db().table("pokedex").select("name,type1").execute()
-        dex_map = {r["name"]: r.get("type1", "normal").lower() for r in dex_result.data}
+        dex_map = {r["name"]: r.get("type1", "normal") for r in dex_result.data}
 
         random.shuffle(available)
         wheel_items = [{"name": p, "image": "", "type": dex_map.get(p, "normal"), "weight": 1} for p in available]
@@ -385,7 +454,7 @@ def get_2player_picks(params):
         version = params.get("version", ["FireRed"])[0]
         trainer_name = params.get("trainerName", [""])[0].lower()
 
-        wheel_result = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", version_filter(version)).execute()
+        wheel_result = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", ["Both", version]).execute()
         section_pokemon = [r["pokemon"] for r in wheel_result.data]
 
         if section_name == "Indigo Plateau":
@@ -398,7 +467,7 @@ def get_2player_picks(params):
                 return ok({"noNewPokemon": True})
 
         dex_result = db().table("pokedex").select("name,type1").execute()
-        dex_map = {r["name"]: r.get("type1", "normal").lower() for r in dex_result.data}
+        dex_map = {r["name"]: r.get("type1", "normal") for r in dex_result.data}
 
         random.shuffle(section_pokemon)
         picks = section_pokemon[:min(3, len(section_pokemon))]
@@ -410,10 +479,9 @@ def get_punishment_data(params):
     try:
         trainer_name = params.get("trainerName", [""])[0].lower()
         current_section = params.get("currentSection", [""])[0]
-        version = params.get("version", ["FireRed"])[0]
 
-        # Fetch this version's sections in order so we can compare section positions
-        sections_result = db().table("sections").select("short_name").in_("version", version_filter(version)).order("id").execute()
+        # Fetch all sections in order so we can compare section positions
+        sections_result = db().table("sections").select("short_name").order("id").execute()
         section_order = [r["short_name"] for r in sections_result.data]
 
         def section_index(name):
@@ -478,31 +546,24 @@ def get_boss_data(params):
                 "version": r.get("version", "Both")
             }
 
-        is_hgss = version in ("HeartGold", "SoulSilver")
-        is_multi = section_name in ["Indigo Plateau", "Post-game", "Lance", "E4Rematch"]
+        is_multi = section_name in ["Indigo Plateau", "Post-game"]
         if is_multi:
-            if section_name in ("Indigo Plateau", "Lance"):
-                elite_names = (["Will", "Koga", "Bruno", "Karen"] if is_hgss
-                               else ["Lorelei", "Bruno", "Agatha", "Lance"])
-                champ_key = "Lance" if is_hgss else "Indigo Plateau"
-            elif section_name == "E4Rematch":
-                elite_names = ["Will Rematch", "Koga Rematch", "Bruno Rematch", "Karen Rematch"]
-                champ_key = "E4Rematch"
-            else:  # Post-game FRLG
-                elite_names = ["Lorelei Rematch", "Bruno Rematch", "Agatha Rematch", "Lance Rematch"]
-                champ_key = "Post-game"
+            elite_names = (
+                ["Lorelei", "Bruno", "Agatha", "Lance"]
+                if section_name == "Indigo Plateau"
+                else ["Lorelei Rematch", "Bruno Rematch", "Agatha Rematch", "Lance Rematch"]
+            )
             entries = []
             for ename in elite_names:
-                result = db().table("bosses").select("*").eq("boss", ename).in_("version", version_filter(version)).execute()
+                result = db().table("bosses").select("*").eq("boss", ename).execute()
                 if result.data:
-                    match = next((r for r in result.data if r.get("version") == version), result.data[0])
-                    entries.append(build_boss_entry(match))
-            champ_result = db().table("bosses").select("*").eq("boss", champ_key).in_("version", version_filter(version)).execute()
+                    entries.append(build_boss_entry(result.data[0]))
+            champ_result = db().table("bosses").select("*").eq("boss", section_name).execute()
             for r in champ_result.data:
                 entries.append(build_boss_entry(r))
             return ok({"multiRow": True, "entries": entries})
 
-        result = db().table("bosses").select("*").eq("boss", section_name).in_("version", version_filter(version)).execute()
+        result = db().table("bosses").select("*").eq("boss", section_name).in_("version", [version, "Both"]).execute()
         if not result.data:
             return ok(None)
         # Prefer exact version match
@@ -815,7 +876,7 @@ def get_friend_view_data(params):
         catches_data = db().table("trainer_catches").select("*").eq("trainer", friend_name).order("id").execute()
         pun_data = db().table("punishment_results").select("*").eq("trainer", friend_name).execute()
 
-        sections_result = db().table("sections").select("*").in_("version", version_filter(version)).order("id").execute()
+        sections_result = db().table("sections").select("*").order("id").execute()
         sections_data = [{
             "shortName": r["short_name"],
             "fullName": r.get("full_name", ""),
@@ -835,7 +896,7 @@ def get_friend_view_data(params):
             if base not in evo_map[evolved]:
                 evo_map[evolved].append(base)
 
-        enc_result = db().table("master_encounters").select("*").in_("version", version_filter(version)).order("id").execute()
+        enc_result = db().table("master_encounters").select("*").in_("version", ["Both", version]).order("id").execute()
         encounter_data = {}
         encounter_route_map = {}
         for r in enc_result.data:
@@ -1075,7 +1136,7 @@ def get_journey_image_data(params):
         display_name = row.get("display_name") or trainer
         version = row.get("version") or "FireRed"
 
-        sections_result = db().table("sections").select("*").in_("version", version_filter(version)).order("id").execute()
+        sections_result = db().table("sections").select("*").order("id").execute()
         sections = [{"shortName": r["short_name"], "fullName": r.get("full_name",""), "levelCap": r.get("level_cap",""), "bossImage": r.get("boss_image","")} for r in sections_result.data]
 
         journey_data = db().table("journey_results").select("*").eq("trainer", trainer).execute()
@@ -1114,7 +1175,7 @@ def get_journey_image_data(params):
             return family
 
         catches_data = db().table("trainer_catches").select("*").eq("trainer", trainer).order("id").execute()
-        enc_result = db().table("master_encounters").select("section,route,pokemon").in_("version", version_filter(version)).execute()
+        enc_result = db().table("master_encounters").select("section,route,pokemon").in_("version", ["Both", version]).execute()
         route_to_section = {}
         for r in enc_result.data:
             route_id = "route-" + r["route"].replace(" ", "-").replace("'", "")
@@ -2087,6 +2148,7 @@ GET_ACTIONS = {
     "getTradeData": get_trade_data,
     "getJourneyWheelData": get_journey_wheel_data,
     "getElite4WheelData": get_elite4_wheel_data,
+    "getBonusWheelData": get_bonus_wheel_data,
     "get2PlayerPicks": get_2player_picks,
     "getPunishmentData": get_punishment_data,
     "getBossData": get_boss_data,
