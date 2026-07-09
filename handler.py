@@ -54,7 +54,7 @@ def create_trainer(body):
 
         name = trainer_name.lower()
         display_name = trainer_name
-        valid_versions = ["FireRed", "LeafGreen"]
+        valid_versions = ["FireRed", "LeafGreen", "HeartGold", "SoulSilver"]
         game_version = version if version in valid_versions else "FireRed"
         mode = "2player" if game_mode == "2player" else "solo"
 
