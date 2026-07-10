@@ -439,11 +439,17 @@ def get_journey_wheel_data(params):
         wheel_result = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", version_filter(version)).execute()
         section_pokemon = [r["pokemon"] for r in wheel_result.data]
 
+        # Already spun for this section (so we don't offer the same slot twice)
         spun_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("section", section_name).in_("spin_type", ["Mandate", "Exclude"]).execute()
-        spun = [r["pokemon"] for r in spun_result.data]
+        spun = set(r["pokemon"] for r in spun_result.data)
 
-        available = [p for p in section_pokemon if p not in spun]
-        list_to_use = available if available else section_pokemon
+        # Globally excluded across all sections — must never appear on any future wheel
+        excluded_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("spin_type", "Exclude").execute()
+        excluded = set(r["pokemon"] for r in excluded_result.data)
+
+        blocked = spun | excluded
+        available = [p for p in section_pokemon if p not in blocked]
+        list_to_use = available if available else [p for p in section_pokemon if p not in excluded]
         random.shuffle(list_to_use)
 
         dex_result = db().table("pokedex").select("name,type1").execute()
