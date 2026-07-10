@@ -1323,7 +1323,9 @@ def get_picks_state(params):
         trainer = params.get("trainer", [""])[0].strip().lower()
         section_name = params.get("section", [""])[0].strip()
 
-        result = db().table("journey_results").select("*").eq("trainer", trainer).eq("section", section_name).execute()
+        # Section may be stored with a game prefix — try all known prefixes
+        possible_sections = [section_name, f"frlg:{section_name}", f"hgss:{section_name}"]
+        result = db().table("journey_results").select("*").eq("trainer", trainer).in_("section", possible_sections).execute()
         picks = sorted(
             [{"spinType": r["spin_type"], "pokemon": r["pokemon"]} for r in result.data if r["spin_type"] in ["Pick1","Pick2","Pick3"]],
             key=lambda x: x["spinType"]
@@ -1704,7 +1706,16 @@ def serve_picks_html(params):
         trainer = params.get("trainer", [""])[0].strip().lower()
         section_name = params.get("section", [""])[0].strip()
 
-        journey_result = db().table("journey_results").select("*").eq("trainer", trainer).eq("section", section_name).execute()
+        trainer_result = db().table("trainers").select("display_name,version").eq("trainer", trainer).execute()
+        display_name = trainer
+        trainer_version = "FireRed"
+        if trainer_result.data:
+            display_name = trainer_result.data[0].get("display_name") or trainer
+            trainer_version = trainer_result.data[0].get("version") or "FireRed"
+
+        # Query with the correct game prefix so HGSS sections (hgss:Whitney etc.) are found
+        prefixed_section = pfx(trainer_version, section_name)
+        journey_result = db().table("journey_results").select("*").eq("trainer", trainer).eq("section", prefixed_section).execute()
 
         picks = sorted(
             [r for r in journey_result.data if r["spin_type"] in ["Pick1","Pick2","Pick3"]],
@@ -1712,13 +1723,6 @@ def serve_picks_html(params):
         )
         mandate_row = next((r for r in journey_result.data if r["spin_type"] == "Mandate"), None)
         exclude_row = next((r for r in journey_result.data if r["spin_type"] == "Exclude"), None)
-
-        trainer_result = db().table("trainers").select("display_name,version").eq("trainer", trainer).execute()
-        display_name = trainer
-        trainer_version = "FireRed"
-        if trainer_result.data:
-            display_name = trainer_result.data[0].get("display_name") or trainer
-            trainer_version = trainer_result.data[0].get("version") or "FireRed"
 
         base_url = "https://lotto-locke.com"
         api_base = "https://lotto-locke-api.onrender.com"
