@@ -284,6 +284,12 @@ def get_bonus_wheel_data(params):
         section_name = params.get("sectionName", [""])[0]
         version      = params.get("version", ["FireRed"])[0]
 
+        # If this section has entries in the wheels table it has a normal wheel —
+        # bonus/cull logic does not apply, tell the frontend to use the regular flow.
+        normal_wheel_check = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", version_filter(version)).limit(1).execute()
+        if normal_wheel_check.data:
+            return ok({"hasNormalWheel": True, "sectionName": section_name})
+
         # -- All sections in order for this version
         sections_result = db().table("sections").select("short_name").in_("version", version_filter(version)).order("id").execute()
         section_order = [r["short_name"] for r in sections_result.data]
