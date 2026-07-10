@@ -311,11 +311,7 @@ def get_bonus_wheel_data(params):
         bonus_mandate_result = db().table("journey_results").select("pokemon").eq("trainer", trainer_name).eq("spin_type", "BonusMandate").execute()
         mandate_names.update(r["pokemon"] for r in bonus_mandate_result.data)
 
-        # -- Pokemon that appear on this section's routes in master_encounters
-        enc_result = db().table("master_encounters").select("pokemon").eq("section", section_name).in_("version", version_filter(version)).execute()
-        route_pokemon = set(r["pokemon"] for r in enc_result.data)
-
-        # -- Wheels for sections BEFORE this one (pokemon already introduced)
+        # -- Wheels for sections BEFORE this one (all pokemon previously available to catch)
         earlier_wheels = db().table("wheels").select("pokemon,section").in_("version", version_filter(version)).execute()
         earlier_pokemon = set()
         for r in earlier_wheels.data:
@@ -326,8 +322,8 @@ def get_bonus_wheel_data(params):
             except ValueError:
                 pass
 
-        # Bonus pool: on this section's routes, first appeared earlier, not caught, not excluded
-        bonus_pool = sorted(p for p in (route_pokemon & earlier_pokemon) if p not in caught_names and p not in excluded)
+        # Bonus pool: all pokemon that were available in earlier sections but not yet caught or excluded
+        bonus_pool = sorted(p for p in earlier_pokemon if p not in caught_names and p not in excluded)
 
         # Pokedex type colours
         dex_result = db().table("pokedex").select("name,type1").execute()
