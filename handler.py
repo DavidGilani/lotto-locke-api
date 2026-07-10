@@ -110,7 +110,7 @@ def load_trainer(body):
         # Journey results
         journey_data = db().table("journey_results").select("*").eq("trainer", name).execute()
         trainer_journey = [
-            {"section": r["section"], "spinType": r["spin_type"], "pokemon": r["pokemon"], "version": r.get("version", "")}
+            {"section": strip(r["section"]), "spinType": r["spin_type"], "pokemon": r["pokemon"], "version": r.get("version", "")}
             for r in journey_data.data
         ]
 
@@ -119,7 +119,7 @@ def load_trainer(body):
         catches_data = db().table("trainer_catches").select("*").eq("trainer", name).order("id").execute()
         trainer_catches = [
             {
-                "route": r["route_id"],
+                "route": strip(r["route_id"]),
                 "name": r["pokemon"],
                 "version": r.get("version", ""),
                 "fainted": r.get("status", "") == "fainted",
@@ -137,8 +137,8 @@ def load_trainer(body):
                 "punishment": r["punishment"],
                 "fullText": r.get("full_text", ""),
                 "duration": r.get("duration", 1),
-                "sectionSpun": r.get("section_spun", ""),
-                "expiresAfterSection": r.get("expires_after_section", ""),
+                "sectionSpun": strip(r.get("section_spun", "")),
+                "expiresAfterSection": strip(r.get("expires_after_section", "")),
                 "faintedKey": r.get("fainted_key", "")
             }
             for r in pun_data.data
@@ -235,6 +235,32 @@ def save_game_mode(body):
 # SECTION / ENCOUNTER / EVOLUTION DATA
 # ============================================================
 
+def game_prefix(version):
+    if version in ("HeartGold", "SoulSilver"): return "hgss:"
+    return "frlg:"
+
+def pfx(version, name):
+    """Add game prefix to a section/route name for storage."""
+    if not name: return name
+    p = game_prefix(version)
+    if ":" in name: return name
+    return p + name
+
+def strip(val):
+    """Strip any game prefix from a stored section/route name."""
+    if not val: return val
+    for p in ("frlg:","hgss:","rse:","dpp:","bw:","b2w2:","xy:","oras:","sm:","usum:","swsh:","sv:"):
+        if val.startswith(p): return val[len(p):]
+    return val
+
+def get_trainer_version(trainer_name):
+    """Look up a trainer's game version from the trainers table."""
+    try:
+        r = db().table("trainers").select("version").eq("trainer", trainer_name).execute()
+        if r.data: return r.data[0].get("version") or "FireRed"
+    except Exception: pass
+    return "FireRed"
+
 def get_section_data(params):
     try:
         result = db().table("sections").select("*").order("id").execute()
@@ -312,15 +338,10 @@ def get_bonus_wheel_data(params):
         cull_eligible = len(non_mandatory_alive) >= 10
         cull_items = [{"name": p, "image": "", "type": dex_map.get(p, "normal"), "weight": 1} for p in non_mandatory_alive] if cull_eligible else []
 
-        # Does this section have any entries in the wheels table at all?
-        wheel_check = db().table("wheels").select("pokemon").eq("section", section_name).in_("version", version_filter(version)).execute()
-        has_normal_wheel = len(wheel_check.data) > 0
-
         return ok({
             "bonusPool": bonus_items,
             "cullPool": cull_items,
             "noBonus": len(bonus_items) == 0,
-            "hasNormalWheel": has_normal_wheel,
             "cullEligible": cull_eligible,
             "sectionName": section_name,
         })
@@ -501,7 +522,7 @@ def get_punishment_data(params):
         active_result = db().table("punishment_results").select("punishment,expires_after_section").eq("trainer", trainer_name).execute()
         active_names = set()
         for r in active_result.data:
-            expires = r.get("expires_after_section", "")
+            expires = strip(r.get("expires_after_section", ""))
             expires_idx = section_index(expires) if expires else len(section_order) - 1
             if expires_idx >= current_idx:
                 active_names.add(r["punishment"])
@@ -551,31 +572,24 @@ def get_boss_data(params):
                 "version": r.get("version", "Both")
             }
 
-        is_hgss = version in ("HeartGold", "SoulSilver")
-        is_multi = section_name in ["Indigo Plateau", "Post-game", "Lance", "E4Rematch"]
+        is_multi = section_name in ["Indigo Plateau", "Post-game"]
         if is_multi:
-            if section_name in ("Indigo Plateau", "Lance"):
-                elite_names = (["Will", "Koga", "Bruno", "Karen"] if is_hgss
-                               else ["Lorelei", "Bruno", "Agatha", "Lance"])
-                champ_key = "Lance" if is_hgss else "Indigo Plateau"
-            elif section_name == "E4Rematch":
-                elite_names = ["Will Rematch", "Koga Rematch", "Bruno Rematch", "Karen Rematch"]
-                champ_key = "E4Rematch"
-            else:
-                elite_names = ["Lorelei Rematch", "Bruno Rematch", "Agatha Rematch", "Lance Rematch"]
-                champ_key = "Post-game"
+            elite_names = (
+                ["Lorelei", "Bruno", "Agatha", "Lance"]
+                if section_name == "Indigo Plateau"
+                else ["Lorelei Rematch", "Bruno Rematch", "Agatha Rematch", "Lance Rematch"]
+            )
             entries = []
             for ename in elite_names:
-                result = db().table("bosses").select("*").eq("boss", ename).in_("version", version_filter(version)).execute()
+                result = db().table("bosses").select("*").eq("boss", ename).execute()
                 if result.data:
-                    match = next((r for r in result.data if r.get("version") == version), result.data[0])
-                    entries.append(build_boss_entry(match))
-            champ_result = db().table("bosses").select("*").eq("boss", champ_key).in_("version", version_filter(version)).execute()
+                    entries.append(build_boss_entry(result.data[0]))
+            champ_result = db().table("bosses").select("*").eq("boss", section_name).execute()
             for r in champ_result.data:
                 entries.append(build_boss_entry(r))
             return ok({"multiRow": True, "entries": entries})
 
-        result = db().table("bosses").select("*").eq("boss", section_name).in_("version", version_filter(version)).execute()
+        result = db().table("bosses").select("*").eq("boss", section_name).in_("version", [version, "Both"]).execute()
         if not result.data:
             return ok(None)
         # Prefer exact version match
@@ -591,12 +605,13 @@ def get_boss_data(params):
 def save_journey_result(body):
     try:
         trainer = body.get("trainerName", "unknown").strip().lower()
+        version = body.get("version", "") or get_trainer_version(trainer)
         db().table("journey_results").insert({
             "trainer": trainer,
-            "section": body.get("sectionName", ""),
+            "section": pfx(version, body.get("sectionName", "")),
             "spin_type": body.get("spinType", ""),
             "pokemon": body.get("pokemon", ""),
-            "version": body.get("version", "")
+            "version": version
         }).execute()
         return ok("Success")
     except Exception as e:
@@ -607,7 +622,8 @@ def delete_journey_result(body):
         trainer = body.get("trainerName", "").strip().lower()
         section_name = body.get("sectionName", "").strip()
         spin_type = body.get("spinType", "").strip()
-        db().table("journey_results").delete().eq("trainer", trainer).eq("section", section_name).eq("spin_type", spin_type).execute()
+        version = body.get("version", "") or get_trainer_version(trainer)
+        db().table("journey_results").delete().eq("trainer", trainer).eq("section", pfx(version, section_name)).eq("spin_type", spin_type).execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
@@ -616,7 +632,8 @@ def delete_2player_picks(body):
     try:
         trainer = body.get("trainerName", "").strip().lower()
         section_name = body.get("sectionName", "").strip()
-        db().table("journey_results").delete().eq("trainer", trainer).eq("section", section_name).in_("spin_type", ["Pick1", "Pick2", "Pick3"]).execute()
+        version = body.get("version", "") or get_trainer_version(trainer)
+        db().table("journey_results").delete().eq("trainer", trainer).eq("section", pfx(version, section_name)).in_("spin_type", ["Pick1", "Pick2", "Pick3"]).execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
@@ -631,18 +648,19 @@ def record_catch(body):
         pkmn_name = body.get("pkmnName", "")
         route_id = body.get("routeId", "")
         version = body.get("version", "FireRed")
+        stored_rid = pfx(version, route_id)
 
         if pkmn_name == "__UNCATCH__":
-            db().table("trainer_catches").delete().eq("trainer", trainer).eq("route_id", route_id).execute()
+            db().table("trainer_catches").delete().eq("trainer", trainer).eq("route_id", stored_rid).execute()
             return ok(True)
 
-        existing = db().table("trainer_catches").select("id").eq("trainer", trainer).eq("route_id", route_id).execute()
+        existing = db().table("trainer_catches").select("id").eq("trainer", trainer).eq("route_id", stored_rid).execute()
         if existing.data:
-            db().table("trainer_catches").update({"pokemon": pkmn_name, "version": version}).eq("trainer", trainer).eq("route_id", route_id).execute()
+            db().table("trainer_catches").update({"pokemon": pkmn_name, "version": version}).eq("trainer", trainer).eq("route_id", stored_rid).execute()
         else:
             db().table("trainer_catches").insert({
                 "trainer": trainer,
-                "route_id": route_id,
+                "route_id": stored_rid,
                 "pokemon": pkmn_name,
                 "version": version,
                 "status": "",
@@ -657,6 +675,8 @@ def save_fainted_pokemon(body):
     try:
         trainer = body.get("trainerName", "").strip().lower()
         route_id = body.get("routeId", "").strip()
+        _ver = body.get("version","") or get_trainer_version(body.get("trainerName","").strip().lower())
+        route_id = pfx(_ver, route_id)
         pkmn_name = body.get("pkmnName", "").strip()
         fainted = body.get("fainted", False)
         fainted_in_section = body.get("faintedInSection", "")
@@ -676,6 +696,7 @@ def save_pokemon_evolution(body):
         route_id = body.get("routeId", "").strip()
         old_name = body.get("oldName", "").strip()
         new_name = body.get("newName", "").strip()
+        route_id = pfx(get_trainer_version(trainer), route_id)
         db().table("trainer_catches").update({"pokemon": new_name}).eq("trainer", trainer).eq("route_id", route_id).eq("pokemon", old_name).execute()
         return ok({"success": True})
     except Exception as e:
@@ -723,8 +744,8 @@ def save_punishment_result(body):
             "punishment": body.get("punishment", ""),
             "full_text": body.get("fullText", ""),
             "duration": body.get("duration", 1),
-            "section_spun": body.get("sectionSpun", ""),
-            "expires_after_section": body.get("expiresAfterSection", ""),
+            "section_spun": pfx(get_trainer_version(trainer), body.get("sectionSpun", "")),
+            "expires_after_section": pfx(get_trainer_version(trainer), body.get("expiresAfterSection", "")),
             "fainted_key": body.get("faintedKey", "")
         }).execute()
         return ok({"success": True})
@@ -736,7 +757,8 @@ def delete_punishment_result(body):
         trainer = body.get("trainerName", "").strip().lower()
         punishment = body.get("punishment", "").strip()
         section_spun = body.get("sectionSpun", "").strip()
-        db().table("punishment_results").delete().eq("trainer", trainer).eq("punishment", punishment).eq("section_spun", section_spun).execute()
+        version = get_trainer_version(trainer)
+        db().table("punishment_results").delete().eq("trainer", trainer).eq("punishment", punishment).eq("section_spun", pfx(version, section_spun)).execute()
         return ok({"success": True})
     except Exception as e:
         return err(str(e))
@@ -749,9 +771,10 @@ def save_boss_battle_log(body):
     try:
         trainer = body.get("trainerName", "").strip().lower()
         slots = body.get("slots", [])
+        version = body.get("version", "") or get_trainer_version(trainer)
         db().table("boss_battle_log").insert({
             "trainer": trainer,
-            "section": body.get("sectionName", ""),
+            "section": pfx(version, body.get("sectionName", "")),
             "slot1": slots[0] if len(slots) > 0 else "",
             "slot2": slots[1] if len(slots) > 1 else "",
             "slot3": slots[2] if len(slots) > 2 else "",
@@ -769,7 +792,8 @@ def get_boss_battle_log(params):
     try:
         trainer = params.get("trainerName", [""])[0].lower()
         section_name = params.get("sectionName", [""])[0]
-        result = db().table("boss_battle_log").select("*").eq("trainer", trainer).eq("section", section_name).execute()
+        version = params.get("version", ["FireRed"])[0] or get_trainer_version(trainer)
+        result = db().table("boss_battle_log").select("*").eq("trainer", trainer).eq("section", pfx(version, section_name)).execute()
         rows = [
             {"slots": [r[f"slot{i}"] for i in range(1,7) if r.get(f"slot{i}")], "result": r.get("result", "")}
             for r in result.data
@@ -784,7 +808,7 @@ def get_defeated_sections(params):
         result = db().table("boss_battle_log").select("section").eq("trainer", trainer).eq("result", "Defeated").execute()
         defeated = []
         for r in result.data:
-            sn = r["section"]
+            sn = strip(r["section"])
             if sn not in defeated:
                 defeated.append(sn)
         return ok(defeated)
@@ -927,13 +951,13 @@ def get_friend_view_data(params):
         bbl_result = db().table("boss_battle_log").select("section").eq("trainer", friend_name).eq("result", "Defeated").execute()
         defeated_sections = []
         for r in bbl_result.data:
-            sn = r["section"]
+            sn = strip(r["section"])
             if sn not in defeated_sections:
                 defeated_sections.append(sn)
 
         spin_map = {}
         for r in journey_data.data:
-            sec = r["section"]
+            sec = strip(r["section"])
             type_ = r["spin_type"]
             pkmn = r["pokemon"]
             spin_map.setdefault(sec, {"picks": []})
@@ -946,7 +970,7 @@ def get_friend_view_data(params):
 
         catch_map = {}
         for r in catches_data.data:
-            catch_map[r["route_id"]] = {
+            catch_map[strip(r["route_id"])] = {
                 "name": r["pokemon"],
                 "fainted": r.get("status", "") == "fainted",
                 "originalName": r.get("original_pokemon", ""),
@@ -979,7 +1003,7 @@ def get_friend_view_data(params):
             fainted = r.get("status", "") == "fainted"
             traded = r.get("trade_status", "") == "traded"
             original_name = r.get("original_pokemon", "")
-            route = r["route_id"]
+            route = strip(r["route_id"])
             fam = get_family(catch_name)
             fam_orig = get_family(original_name) if original_name else {}
             is_mand = any(mn in fam or mn in fam_orig for mn in all_mandate_names)
@@ -1154,7 +1178,7 @@ def get_journey_image_data(params):
         journey_data = db().table("journey_results").select("*").eq("trainer", trainer).execute()
         spin_map = {}
         for r in journey_data.data:
-            sec = r["section"]
+            sec = strip(r["section"])
             spin_map.setdefault(sec, {})
             if r["spin_type"] == "Mandate":
                 spin_map[sec]["mandate"] = r["pokemon"]
@@ -1197,7 +1221,7 @@ def get_journey_image_data(params):
         catches_by_section = {}
         graveyard_no_section = []
         for r in catches_data.data:
-            route_id = r["route_id"]
+            route_id = strip(r["route_id"])
             catch_sec = route_to_section.get(route_id, "")
             fainted = r.get("status","") == "fainted"
             fainted_in_section = r.get("fainted_in_section","")
@@ -1230,7 +1254,7 @@ def get_journey_image_data(params):
         boss_attempts = {}
         boss_teams = {}
         for r in bbl_data.data:
-            sec = r["section"]
+            sec = strip(r["section"])
             result = r.get("result","")
             slots = [r[f"slot{i}"] for i in range(1,7) if r.get(f"slot{i}")]
             boss_attempts.setdefault(sec, [])
