@@ -237,7 +237,7 @@ def save_game_mode(body):
 
 def version_filter(version):
     if version in ("HeartGold", "SoulSilver"): return ["BothHGSS", version]
-    return version_filter(version)
+    return ["Both", version]
 
 def game_prefix(version):
     if version in ("HeartGold", "SoulSilver"): return "hgss:"
