@@ -1033,9 +1033,11 @@ def get_friend_view_data(params):
 
         active_punishments = []
         for p in pun_data.data:
+            expires_after = strip(p.get("expires_after_section", ""))
+            section_spun = strip(p.get("section_spun", ""))
             exp_idx = len(sections_data) - 1
             for i, sec in enumerate(sections_data):
-                if sec["shortName"] == p.get("expires_after_section", ""):
+                if sec["shortName"] == expires_after:
                     exp_idx = i
                     break
             if exp_idx >= current_section_index:
@@ -1044,8 +1046,8 @@ def get_friend_view_data(params):
                     p.get("punishment", ""),
                     p.get("full_text", ""),
                     p.get("duration", 1),
-                    p.get("section_spun", ""),
-                    p.get("expires_after_section", "")
+                    section_spun,
+                    expires_after
                 ])
 
         return ok({
