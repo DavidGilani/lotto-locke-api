@@ -1,0 +1,38 @@
+name: Supabase Keepalive
+
+# Supabase pauses free-tier projects after 7 days of no activity.
+# This workflow issues a lightweight read request against the database twice a
+# week (Mon & Thu), which counts as activity and keeps the project unpaused.
+# It can also be triggered manually from the Actions tab (Run workflow).
+
+on:
+  schedule:
+    - cron: '17 6 * * 1,4'   # 06:17 UTC every Monday and Thursday
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query Supabase to keep the project active
+        env:
+          # Public "publishable" (anon) key — safe to store in the repo; it is
+          # the same key that ships in client apps. RLS still governs access.
+          SUPABASE_URL: https://ihgpiyvgojghyvcejmqp.supabase.co
+          SUPABASE_KEY: sb_publishable_DGUaqzZVqW7fCXkOtmvAJQ_uIuLE0Kl
+        run: |
+          echo "Pinging $SUPABASE_URL ..."
+          HTTP_CODE=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' \
+            "$SUPABASE_URL/rest/v1/sections?select=short_name&limit=1" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY")
+          echo "HTTP status: $HTTP_CODE"
+          echo "Response: $(head -c 300 /tmp/resp.txt)"
+          # Any non-5xx response means the API/database answered, which is what
+          # keeps the project active. Fail only on server errors so a genuine
+          # outage is visible in the Actions history.
+          if [ "$HTTP_CODE" -ge 500 ] || [ "$HTTP_CODE" = "000" ]; then
+            echo "::error::Supabase did not respond successfully."
+            exit 1
+          fi
+          echo "Keepalive ping succeeded."
